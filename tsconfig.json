@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
+
+    // Permits both `./money` and `./money.ts` as specifiers. Enabled so the
+    // repo does not have to litigate which of the two styles is correct in
+    // every review; `noEmit` is already set, which this flag requires.
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src", "test"]
+}
