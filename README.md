@@ -155,7 +155,7 @@ The rule, which the type system enforces rather than the documentation:
 > Neither is ever a JavaScript `number`.
 
 ```ts
-import { Money, Quantity, Rate, price } from 'billing-kit';
+import { Money, Quantity, Rate, price } from '@quxkit/billing-kit';
 
 const q = Quantity.fromDecimalString('1234567');      // tokens
 const r = Rate.fromDecimalString('0.00012');          // cents per token ($0.0000012)
@@ -199,7 +199,7 @@ the currency has, which the currency tag already answers.
 ## Ingest
 
 ```ts
-import { createBilling, Quantity } from 'billing-kit';
+import { createBilling, Quantity } from '@quxkit/billing-kit';
 
 const billing = createBilling({ db });   // once, at startup
 
@@ -227,7 +227,7 @@ The free functions are still exported and still take `(db, …, now)`, for code
 that holds a transaction or dispatches across shards per call:
 
 ```ts
-import { record } from 'billing-kit';
+import { record } from '@quxkit/billing-kit';
 await record(db, event, new Date());
 ```
 
@@ -267,7 +267,7 @@ Events collapse to one billable quantity per window, four ways — the same set 
 metered plan chooses from:
 
 ```ts
-import { aggregateUsage } from 'billing-kit';
+import { aggregateUsage } from '@quxkit/billing-kit';
 
 const { quantity } = await aggregateUsage(db, {
   tenantId: 'acme', subjectId: 'user_123', metric: 'api.calls',
@@ -317,7 +317,7 @@ balance; the payment clears it. Nothing is ever updated or deleted, so the whole
 history is re-derivable at any time.
 
 ```ts
-import { post, accrualPosting, balance } from 'billing-kit';
+import { post, accrualPosting, balance } from '@quxkit/billing-kit';
 
 await post(db, accrualPosting({
   tenantId: 'acme',
@@ -359,8 +359,8 @@ lines that sum to a total. It is pure: no database, so it can be tested and
 shown to a customer as a preview.
 
 ```ts
-import { Money, Quantity, Rate } from 'billing-kit';
-import { definePlan, chargeForPeriod } from 'billing-kit/subscriptions';
+import { Money, Quantity, Rate } from '@quxkit/billing-kit';
+import { definePlan, chargeForPeriod } from '@quxkit/billing-kit/subscriptions';
 
 const pro = definePlan({
   id: 'pro', currency: 'USD', interval: 'month',
@@ -398,7 +398,7 @@ sweep. It is idempotent, so an overlapping or over-frequent fire charges each
 period exactly once.
 
 ```ts
-import { chargeDueSubscriptions } from 'billing-kit/subscriptions';
+import { chargeDueSubscriptions } from '@quxkit/billing-kit/subscriptions';
 
 // inside an authenticated POST /cron/charge-due:
 const report = await chargeDueSubscriptions(db, {

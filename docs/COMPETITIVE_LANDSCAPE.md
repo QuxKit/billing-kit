@@ -76,7 +76,7 @@ already use: separate import, opt-in compile, no new runtime coupling.
 
 ```ts
 // billing-kit/subscriptions  (proposed)
-import { definePlan, chargePeriod } from 'billing-kit/subscriptions';
+import { definePlan, chargePeriod } from '@quxkit/billing-kit/subscriptions';
 
 const pro = definePlan({
   id: 'pro',
