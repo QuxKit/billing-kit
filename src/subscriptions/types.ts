@@ -15,6 +15,7 @@
 
 import type { Money, Quantity, Rate, Tier, TierMode } from '../money.ts';
 import type { SubjectId, TenantId } from '../types.ts';
+import type { DiscountRule } from './discount.ts';
 
 /** How often a plan renews. Interval arithmetic is calendar-aware (see plan.ts). */
 export type BillingInterval = 'day' | 'week' | 'month' | 'year';
@@ -67,7 +68,7 @@ export interface Plan {
 
 /** One line of a period's charge, kept separate so an invoice can show them. */
 export interface ChargeLine {
-  kind: 'flat' | 'seats' | 'usage';
+  kind: 'flat' | 'seats' | 'usage' | 'discount';
   description: string;
   amount: Money;
   /** Present on usage and seat lines. */
@@ -97,6 +98,12 @@ export interface PeriodChargeInput {
   proration?: { activeDays: number; periodDays: number };
   /** This period is within the trial: waive base and seats. Usage still priced. */
   trial?: boolean;
+  /**
+   * A discount applied to this period's charge, after base, seats and usage are
+   * summed — the coupon a subscription redeemed. Use `discountForPeriod` to turn
+   * a time-limited coupon into the rule (or nothing) for the period being billed.
+   */
+  discount?: DiscountRule;
 }
 
 export type SubscriptionState = 'trialing' | 'active' | 'canceled';

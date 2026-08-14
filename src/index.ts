@@ -56,6 +56,10 @@ export {
   settlementPosting,
   paymentPosting,
   refundPosting,
+  creditNotePosting,
+  walletTopupPosting,
+  walletRedeemPosting,
+  walletBalance,
 } from './ledger';
 export type { BalanceQuery, EntriesQuery } from './ledger';
 

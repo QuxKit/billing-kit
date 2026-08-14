@@ -32,9 +32,9 @@ first-class; **delegated**: handled by the payment provider through the adapter;
 | Proration — partial periods | ✅ | **core** — base + seats prorate, usage never | ✅ **shipped** |
 | Tiered pricing — volume / graduated | ✅ | **core** — `priceTiered`, rounds once | ✅ **shipped** |
 | Hybrid — flat fee + usage overage | ✅ | **core** — a plan binds base + overage | ✅ **shipped** |
-| Coupons / discounts | ✅ | **gap** | soon |
-| Prepaid credits / wallets | ✅ | **gap** — but ledger-native (a liability account) | soon |
-| Credit notes | ✅ | **gap** — but ledger-native (a compensating posting) | soon |
+| Coupons / discounts | ✅ | **core** — `applyDiscount` + coupon durations | ✅ **shipped** |
+| Prepaid credits / wallets | ✅ | **core** — `customer_credit` account + wallet postings | ✅ **shipped** |
+| Credit notes | ✅ | **core** — `creditNotePosting`, a compensating posting | ✅ **shipped** |
 | Invoicing — line items, PDF | ✅ | **delegated** to provider | later |
 | Taxes | ✅ via Anrok/Avalara | **gap by design** — interface, no engine | later (adapter) |
 | Dunning / failed-payment recovery | ✅ | **gap by design** | later |
@@ -43,11 +43,12 @@ first-class; **delegated**: handled by the payment provider through the adapter;
 
 **Reading it:** where billing-kit is an *edge*, it's because the correctness model
 (exact money + double-entry ledger) is deeper than a platform that treats the
-ledger as an implementation detail. Where it's a *gap*, most gaps are either
-ledger-native (wallets, credit notes — a liability account and a compensating
-posting, which the ledger already supports) or deliberately external (tax,
-dunning). The one gap that is neither — and that the common SaaS case actually
-needs — is **subscriptions**.
+ledger as an implementation detail. The gaps that were ledger-native — wallets, a
+credit note — turned out to *be* the ledger (a liability account and a
+compensating posting) and are now shipped; what remains a gap is deliberately
+external (tax, dunning). The gap that was neither — and that the common SaaS case
+actually needs — was **subscriptions**, and it, with tiered pricing, coupons,
+wallets and credit notes, is now built.
 
 ## The one that mattered: subscriptions / recurring plans — shipped
 
@@ -117,12 +118,15 @@ This is the smallest change that closes the biggest gap and stays true to the
    proration, trials, and an idempotent `chargeSubscriptionPeriod` that posts to
    the existing ledger; capture stays delegated.
 
-**SOON — high ROI, ledger-native, small surface:**
-3. Coupons / discounts — a pricing modifier applied before rounding.
-4. Prepaid credits / wallets — a liability account drawn down by usage; the ledger
-   already models it, this is a helper + schema, not a new subsystem.
-5. Credit notes — a compensating posting; append-only makes this the correct shape
-   already.
+**DONE — high ROI, ledger-native, small surface (shipped):**
+3. ✅ Coupons / discounts — `applyDiscount` (percentage in basis points or fixed,
+   clamped) applied before rounding; `discountForPeriod` for time-limited coupons.
+4. ✅ Prepaid credits / wallets — a `customer_credit` liability account with
+   top-up (from a verified payment), redeem, and `walletBalance`.
+5. ✅ Credit notes — `creditNotePosting`, the compensating posting append-only
+   made the correct shape already.
+
+**SOON — what is left:**
 6. Remaining aggregations (max, unique) as first-class metering options.
 
 **LATER — external by design, or a reporting layer:**

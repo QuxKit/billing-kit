@@ -16,6 +16,9 @@
 
 export { definePlan, chargeForPeriod, addInterval, daysInPeriod } from './plan.ts';
 
+export { applyDiscount, discountForPeriod } from './discount.ts';
+export type { DiscountRule, Coupon, CouponDuration } from './discount.ts';
+
 export { createSubscription, getSubscription, cancelSubscription } from './store.ts';
 export type { CreateSubscriptionInput, SubscriptionRef } from './store.ts';
 

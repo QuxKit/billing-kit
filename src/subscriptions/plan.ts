@@ -3,6 +3,7 @@
 
 import { BillingError } from '../errors.ts';
 import { Money, Quantity, currencyExponent, price, priceTiered, scaleFraction } from '../money.ts';
+import { applyDiscount } from './discount.ts';
 import type {
   BillingInterval,
   ChargeLine,
@@ -118,6 +119,19 @@ export function chargeForPeriod(plan: Plan, input: PeriodChargeInput = {}): Peri
       quantity: billable,
       residueMinor: priced.residueMinor,
     });
+  }
+
+  // A discount applies to the subtotal of everything charged so far. It is added
+  // as a negative line, so the returned lines still sum to the total and an
+  // invoice can show "−$10.00 coupon" as its own row.
+  if (input.discount) {
+    const subtotal = lines.length === 0 ? Money.zero(currency) : Money.sum(lines.map((l) => l.amount), currency);
+    if (subtotal.isPositive()) {
+      const off = applyDiscount(subtotal, input.discount);
+      if (off.isPositive()) {
+        lines.push({ kind: 'discount', description: 'discount', amount: off.negate() });
+      }
+    }
   }
 
   const total = lines.length === 0 ? Money.zero(currency) : Money.sum(lines.map((l) => l.amount), currency);

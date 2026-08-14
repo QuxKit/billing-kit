@@ -143,6 +143,14 @@ export type AccountKind =
   | 'revenue_settled'
   | 'settlement_variance'
   | 'cash'
+  /**
+   * Prepaid credit — a wallet. A liability: money the customer has paid us that
+   * we have not yet earned, so it carries a credit (negative) balance and is
+   * drawn down as usage is charged. It is not `cash` and not revenue; conflating
+   * a topped-up balance with earned revenue is how a company recognises money it
+   * still owes back.
+   */
+  | 'customer_credit'
   | 'tax_payable'
   | 'rounding'
   | 'write_off';

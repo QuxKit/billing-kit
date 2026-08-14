@@ -504,3 +504,124 @@ export function refundPosting(input: {
     ],
   };
 }
+
+/**
+ * A credit note. Reduces what a customer owes and reverses the revenue it was
+ * accrued against — the append-only way to say "this charge was too much",
+ * never an edit of the charge that was.
+ *
+ * It is the mirror of `accrualPosting`: that raised the customer's balance and
+ * accrued revenue; this lowers the balance and reverses the accrual. Both stay
+ * visible, which is the whole reason a mistake becomes a second row rather than
+ * a changed one — the history reads "charged X, credited Y", and an auditor can
+ * see both. `amount` is positive; the legs carry the direction.
+ */
+export function creditNotePosting(input: {
+  tenantId: TenantId;
+  subjectId: SubjectId;
+  creditNoteId: string;
+  amount: Money;
+  memo?: string;
+}): LedgerPosting {
+  if (input.amount.isNegative()) {
+    throw new BillingError({
+      code: 'invalid_allocation',
+      reason: 'credit note amount must be positive; the legs carry the direction',
+    });
+  }
+  return {
+    tenantId: input.tenantId,
+    sourceKind: 'adjustment',
+    sourceId: input.creditNoteId,
+    legs: [
+      { account: 'customer_balance', subjectId: input.subjectId, amount: input.amount.negate(), memo: input.memo },
+      { account: 'revenue_accrued', subjectId: input.subjectId, amount: input.amount, memo: input.memo },
+    ],
+  };
+}
+
+/**
+ * A wallet top-up. Prepaid credit arriving.
+ *
+ * Like every cash movement, only ever built from a verified payment webhook —
+ * there is no `topUp(subject, amount)` to be called from a request body. The
+ * money lands as `cash` and raises a `customer_credit` liability: we hold funds
+ * we have not yet earned and may owe back, so it is not revenue and must not be
+ * recognised as any.
+ */
+export function walletTopupPosting(input: {
+  tenantId: TenantId;
+  subjectId: SubjectId;
+  paymentId: string;
+  amount: Money;
+  occurredAt: Date;
+  memo?: string;
+}): LedgerPosting {
+  if (input.amount.isNegative()) {
+    throw new BillingError({ code: 'invalid_allocation', reason: 'top-up amount must be positive' });
+  }
+  return {
+    tenantId: input.tenantId,
+    sourceKind: 'payment',
+    sourceId: input.paymentId,
+    postedAt: input.occurredAt,
+    legs: [
+      { account: 'cash', subjectId: input.subjectId, amount: input.amount, memo: input.memo },
+      { account: 'customer_credit', subjectId: input.subjectId, amount: input.amount.negate(), memo: input.memo },
+    ],
+  };
+}
+
+/**
+ * Draw prepaid credit down against what the customer owes.
+ *
+ * Reduces the `customer_credit` liability and the `customer_balance` receivable
+ * by the same amount — the wallet paying the bill. `amount` must not exceed the
+ * wallet's balance (`walletBalance`); the ledger does not enforce a per-account
+ * sign, so redeeming more than is there would drive the liability positive,
+ * which is meaningless. The caller checks the balance first — the same division
+ * of responsibility as `refundPosting`, which trusts the caller not to refund
+ * more than was paid.
+ */
+export function walletRedeemPosting(input: {
+  tenantId: TenantId;
+  subjectId: SubjectId;
+  redemptionId: string;
+  amount: Money;
+  memo?: string;
+}): LedgerPosting {
+  if (input.amount.isNegative()) {
+    throw new BillingError({ code: 'invalid_allocation', reason: 'redemption amount must be positive' });
+  }
+  return {
+    tenantId: input.tenantId,
+    sourceKind: 'adjustment',
+    sourceId: input.redemptionId,
+    legs: [
+      { account: 'customer_credit', subjectId: input.subjectId, amount: input.amount, memo: input.memo },
+      { account: 'customer_balance', subjectId: input.subjectId, amount: input.amount.negate(), memo: input.memo },
+    ],
+  };
+}
+
+/**
+ * The prepaid credit available to a subject, as a positive amount.
+ *
+ * `customer_credit` is a liability and carries a credit (negative) balance, so
+ * the money the customer has to spend is its negation. Returned positive because
+ * "you have 20.00 of credit" is what a caller means to ask, and a negative
+ * twenty there is the sign error this function exists to not make everyone redo.
+ */
+export async function walletBalance(
+  db: SqlExecutor,
+  q: { tenantId: TenantId; subjectId: SubjectId; currency: string; asOf?: Date },
+): Promise<Money> {
+  const held = await balance(db, {
+    tenantId: q.tenantId,
+    subjectId: q.subjectId,
+    account: 'customer_credit',
+    currency: q.currency,
+    asOf: q.asOf,
+  });
+  return held.negate();
+}

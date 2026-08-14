@@ -9,6 +9,7 @@ import { describe, it } from 'node:test';
 import { BillingError } from '../src/errors';
 import { Money, Quantity, Rate } from '../src/money';
 import { addInterval, chargeForPeriod, daysInPeriod, definePlan } from '../src/subscriptions/plan.ts';
+import { applyDiscount, discountForPeriod } from '../src/subscriptions/discount.ts';
 
 const usd = (v: string) => Money.fromDecimalString(v, 'USD');
 
@@ -136,6 +137,44 @@ describe('definePlan validation', () => {
         }),
       (e) => BillingError.hasCode(e, 'invalid_plan'),
     );
+  });
+});
+
+describe('discounts and coupons', () => {
+  it('takes a percentage off, rounding once', () => {
+    // 20% of 79.60 = 15.92
+    assert.equal(applyDiscount(usd('79.60'), { kind: 'percent', bps: 2000 }).minor, 1592n);
+  });
+
+  it('takes a fixed amount off, clamped to the charge', () => {
+    assert.equal(applyDiscount(usd('79.60'), { kind: 'amount', off: usd('10.00') }).minor, 1000n);
+    // a coupon bigger than the bill cannot make it negative
+    assert.equal(applyDiscount(usd('79.60'), { kind: 'amount', off: usd('100.00') }).minor, 7960n);
+  });
+
+  it('shows the discount as its own negative line and nets the total', () => {
+    const c = chargeForPeriod(pro, {
+      seats: 3,
+      usage: { 'tokens.input': Quantity.fromBigInt(1_500_000n) },
+      discount: { kind: 'percent', bps: 2000 },
+    });
+    // 7960 subtotal − 1592 = 6368
+    assert.equal(c.total.minor, 6368n);
+    const line = c.lines.find((l) => l.kind === 'discount')!;
+    assert.equal(line.amount.minor, -1592n);
+  });
+
+  it('applies a coupon only for the periods its duration covers', () => {
+    const once = { id: 'c1', rule: { kind: 'percent', bps: 5000 } as const, duration: 'once' as const };
+    assert.deepEqual(discountForPeriod(once, 0), { kind: 'percent', bps: 5000 });
+    assert.equal(discountForPeriod(once, 1), null);
+
+    const threeMonths = { id: 'c2', rule: { kind: 'amount', off: usd('5.00') } as const, duration: { periods: 3 } };
+    assert.ok(discountForPeriod(threeMonths, 2));
+    assert.equal(discountForPeriod(threeMonths, 3), null);
+
+    const forever = { id: 'c3', rule: { kind: 'percent', bps: 1000 } as const, duration: 'forever' as const };
+    assert.ok(discountForPeriod(forever, 99));
   });
 });
 

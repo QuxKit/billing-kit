@@ -87,6 +87,8 @@ system*. Everything below is how it earns the word "correct."
 | Metering engine | `billing-kit/metering` | ✅ implemented, tested |
 | Tiered pricing — volume / graduated | `billing-kit` | ✅ implemented, tested |
 | Subscriptions — plans, seats, overage, proration, trials | `billing-kit/subscriptions` | ✅ implemented, tested |
+| Coupons / discounts | `billing-kit/subscriptions` | ✅ implemented, tested |
+| Credit notes, prepaid wallets | `billing-kit` | ✅ implemented, tested |
 | Provider adapters — Stripe, Paddle | `billing-kit/providers` | ✅ implemented, tested |
 
 Metering, subscriptions and providers are **separate entry points**, not
@@ -370,6 +372,27 @@ const report = await chargeDueSubscriptions(db, {
   usageFor: (sub, period) => meterUsage(db, sub, period), // omit for flat plans
 });                                                     // { swept, charged, skipped, errors }
 ```
+
+## Discounts, credit notes and wallets
+
+Three modifiers that stay true to the ledger — a discount lowers a charge before
+it is posted, a credit note and a wallet are postings in their own right.
+
+- **Discounts / coupons** (`billing-kit/subscriptions`) — `applyDiscount(amount,
+  rule)` takes a percentage (basis points, never a float) or a fixed amount off,
+  clamped so a coupon can never make a bill negative. Pass one to
+  `chargeForPeriod` and it becomes a negative line that nets the total.
+  `discountForPeriod(coupon, n)` turns a "20% off for three months" coupon into
+  the rule for period *n*, or nothing once it has run out.
+- **Credit notes** — `creditNotePosting(...)` is the mirror of an accrual: it
+  lowers the customer's balance and reverses the revenue, as a *new* posting.
+  A mistake becomes a second row, never an edit of the first, so the statement
+  reads "charged X, credited Y" and both are auditable.
+- **Prepaid wallets** — `customer_credit` is a liability account: `walletTopupPosting`
+  turns a verified payment into credit (never a `topUp()` callable from a request
+  body), `walletRedeemPosting` draws it down against a charge, and `walletBalance`
+  reports what is left, positive. Prepaid money is money you may owe back, so it
+  is never counted as revenue.
 
 ## Database
 

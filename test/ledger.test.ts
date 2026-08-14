@@ -17,11 +17,15 @@ import {
   accrualPosting,
   assertBalanced,
   balance,
+  creditNotePosting,
   entries,
   paymentPosting,
   post,
   refundPosting,
   settlementPosting,
+  walletBalance,
+  walletRedeemPosting,
+  walletTopupPosting,
 } from '../src/ledger';
 import { Money } from '../src/money';
 import type { LedgerLeg } from '../src/types';
@@ -542,5 +546,66 @@ describe('partition maintenance', { skip: harness === null ? SKIP_REASON : false
        WHERE lo <> (date_trunc('month', lo AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
           OR hi <> ((date_trunc('month', lo AT TIME ZONE 'UTC') + interval '1 month') AT TIME ZONE 'UTC')`);
     assert.equal(rows[0]!.bad, '0', 'a month partition must span exactly one UTC calendar month');
+  });
+});
+
+describe('credit notes', () => {
+  it('reverses a charge: balanced legs, opposite sign to the accrual', () => {
+    const note = creditNotePosting({ tenantId: 't1', subjectId: 's1', creditNoteId: 'cn_1', amount: usd('19.99') });
+    assertBalanced(note.legs);
+    const bySide = Object.fromEntries(note.legs.map((l) => [l.account, l.amount.minor]));
+    // accrual is customer_balance +, revenue_accrued −; a credit note is the mirror
+    assert.equal(bySide['customer_balance'], -1999n);
+    assert.equal(bySide['revenue_accrued'], 1999n);
+  });
+
+  it('refuses a negative amount', () => {
+    assert.throws(
+      () => creditNotePosting({ tenantId: 't1', subjectId: 's1', creditNoteId: 'cn_x', amount: usd('-1.00') }),
+      (e: unknown) => BillingError.hasCode(e, 'invalid_allocation'),
+    );
+  });
+});
+
+describe('credit notes and wallets — Postgres', { skip: harness === null ? SKIP_REASON : false }, () => {
+  const h = harness as Harness;
+
+  it('a credit note lowers a customer balance without editing the charge', async () => {
+    const subjectId = nextId('sub');
+    await post(h.db, accrualPosting({ tenantId: 't1', subjectId, chargeId: nextId('charge'), amount: usd('50.00') }), NOW);
+    await post(h.db, creditNotePosting({ tenantId: 't1', subjectId, creditNoteId: nextId('cn'), amount: usd('20.00') }), NOW);
+
+    const bal = await balance(h.db, { tenantId: 't1', subjectId, account: 'customer_balance', currency: 'USD' });
+    assert.equal(bal.minor, 3000n, '50 charged − 20 credited');
+    // both rows still exist — nothing was edited
+    const rows = await entries(h.db, { tenantId: 't1', subjectId });
+    assert.equal(rows.length, 4);
+  });
+
+  it('a wallet is topped up from a payment and drawn down against a charge', async () => {
+    const subjectId = nextId('wal');
+    // prepaid top-up: cash in, credit liability up
+    await post(h.db, walletTopupPosting({ tenantId: 't1', subjectId, paymentId: nextId('pay'), amount: usd('50.00'), occurredAt: NOW }), NOW);
+    assert.equal((await walletBalance(h.db, { tenantId: 't1', subjectId, currency: 'USD' })).minor, 5000n);
+
+    // charge 30, then redeem it from the wallet
+    await post(h.db, accrualPosting({ tenantId: 't1', subjectId, chargeId: nextId('charge'), amount: usd('30.00') }), NOW);
+    await post(h.db, walletRedeemPosting({ tenantId: 't1', subjectId, redemptionId: nextId('rdm'), amount: usd('30.00') }), NOW);
+
+    // wallet down to 20, and the charge is settled by the credit
+    assert.equal((await walletBalance(h.db, { tenantId: 't1', subjectId, currency: 'USD' })).minor, 2000n);
+    const owed = await balance(h.db, { tenantId: 't1', subjectId, account: 'customer_balance', currency: 'USD' });
+    assert.equal(owed.minor, 0n, '30 charged − 30 redeemed');
+  });
+
+  it('redeeming is idempotent on its id', async () => {
+    const subjectId = nextId('wal');
+    await post(h.db, walletTopupPosting({ tenantId: 't1', subjectId, paymentId: nextId('pay'), amount: usd('10.00'), occurredAt: NOW }), NOW);
+    const redeem = walletRedeemPosting({ tenantId: 't1', subjectId, redemptionId: 'rdm_fixed', amount: usd('4.00') });
+    const first = await post(h.db, redeem, NOW);
+    const again = await post(h.db, redeem, NOW);
+    assert.equal(first.deduplicated, false);
+    assert.equal(again.deduplicated, true);
+    assert.equal((await walletBalance(h.db, { tenantId: 't1', subjectId, currency: 'USD' })).minor, 600n);
   });
 });

@@ -146,7 +146,8 @@ CREATE TABLE IF NOT EXISTS billing.ledger_entries (
   PRIMARY KEY (id, posted_at),
   CONSTRAINT ledger_entries_account_known CHECK (account IN (
     'customer_balance', 'revenue_accrued', 'revenue_settled',
-    'settlement_variance', 'cash', 'tax_payable', 'rounding', 'write_off'
+    'settlement_variance', 'cash', 'customer_credit',
+    'tax_payable', 'rounding', 'write_off'
   ))
 ) PARTITION BY RANGE (posted_at);
 
