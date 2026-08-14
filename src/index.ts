@@ -11,10 +11,17 @@
 //     every one of them a build dependency of the others, so an error in an
 //     adapter breaks the typecheck of code that does not use it.
 //
-// There is no `createBilling` singleton here yet. Configuration is an argument,
-// never a module-level global and never `process.env`: a library that reads the
-// environment cannot be instantiated twice in one process, which is what a test
-// suite and a multi-region worker both need.
+// `createBilling` is a factory, not a singleton, and that distinction is the
+// whole of the rule this file used to state as "no singleton yet".
+// Configuration is still an argument and never a module-level global or
+// `process.env` — a library that reads the environment cannot be instantiated
+// twice in one process, which is what a test suite and a multi-region worker
+// both need. An instance you construct twice keeps that property; a module that
+// holds the connection does not.
+//
+// The free functions below are still the API. `createBilling` binds the
+// executor and the clock over them for the common case where an application has
+// one of each.
 
 export {
   Money,
@@ -31,6 +38,9 @@ export type { MoneyJSON, PricedAmount } from './money';
 
 export { BillingError } from './errors';
 export type { BillingFailure, BillingErrorCode } from './errors';
+
+export { createBilling } from './instance';
+export type { Billing, BillingOptions } from './instance';
 
 export { record, recordMany, queryUsage, validateEvent } from './events';
 export type { UsageQuery, StoredUsageEvent } from './events';

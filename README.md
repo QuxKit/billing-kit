@@ -148,9 +148,11 @@ the currency has, which the currency tag already answers.
 ## Ingest
 
 ```ts
-import { record } from 'billing-kit';
+import { createBilling, Quantity } from 'billing-kit';
 
-const result = await record(db, {
+const billing = createBilling({ db });   // once, at startup
+
+const result = await billing.record({
   tenantId: 'acme',
   subjectId: 'user_123',
   source: 'api',
@@ -158,9 +160,34 @@ const result = await record(db, {
   metric: 'tokens.input',      // deduplicate a retry, because the retry would
   quantity: Quantity.fromBigInt(1234n),   // generate a second one
   occurredAt: new Date(),
-}, new Date());
+});
 
 result.deduplicated;  // true on a replay. Answer 200, never 409.
+```
+
+`createBilling` binds the executor and the clock so neither is repeated per
+call. It is a factory rather than a module-level singleton: two instances in one
+process is the case that matters — a test suite with a rolled-back executor per
+case, a worker spanning regions, a tenant on its own database — and a module
+holding the connection serves exactly one of them. Configuration stays an
+argument; nothing here reads `process.env`.
+
+The free functions are still exported and still take `(db, …, now)`, for code
+that holds a transaction or dispatches across shards per call:
+
+```ts
+import { record } from 'billing-kit';
+await record(db, event, new Date());
+```
+
+Writes that must not disagree go in one transaction. The instance handed to the
+callback is bound to it, so nothing inside can escape onto another connection:
+
+```ts
+await billing.transaction(async (tx) => {
+  await tx.record(event);        // usage
+  await tx.post(accrual);        // and the ledger entry for it
+});                              // both, or neither
 ```
 
 A duplicate is success. A retrying client treats 409 as fatal and either drops
