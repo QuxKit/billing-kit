@@ -1,0 +1,42 @@
+# CI — typecheck, build and the full test suite on every push and PR.
+#
+# Runs on the self-hosted `host` runner (brett-local), which has node (nvm),
+# pnpm, git and PostgreSQL already — so the DB-backed tests run for real rather
+# than skipping. No external actions are used (no actions/checkout): the runner
+# has no configured action registry, so the checkout is a plain git clone with
+# the job token, which keeps this self-contained.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: host
+    steps:
+      - name: Put node / pnpm / psql on PATH
+        # nvm's node is not on the runner's PATH by default; glob the installed
+        # version so a node upgrade does not silently break CI. GITHUB_PATH is
+        # prepended for every later step.
+        run: |
+          ls -d /Users/ezyp/.nvm/versions/node/*/bin | tail -1 >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/postgresql@17/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+
+      - name: Checkout
+        run: |
+          rm -rf src
+          git clone "http://token:${{ github.token }}@localhost:3003/${{ github.repository }}.git" src
+          cd src && git checkout "${{ github.sha }}"
+
+      - name: Typecheck, build, test
+        working-directory: src
+        env:
+          BILLING_KIT_TEST_DATABASE_URL: postgres://localhost:5432/billing_kit_test
+        run: |
+          pnpm install
+          pnpm run typecheck
+          pnpm run build
+          pnpm test
