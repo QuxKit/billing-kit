@@ -5,3 +5,6 @@ node_modules
 dist/
 .env
 *.log
+
+# `npm pack` writes here unless told otherwise, and verify-pack calls it.
+*.tgz

@@ -1,12 +1,23 @@
-// Adversarial probes of the core money paths. Not part of the shipped suite.
+// Adversarial probes of the core money paths.
+//
+// These are red on purpose. Each failure names a real defect in the shipped
+// code — A2 and A4 in particular, where a replay carrying a *different* amount
+// is reported as a boring duplicate and the correction is silently discarded.
+// A red test that names a defect is worth more than a green suite that hides
+// one, so they stay, and they stay failing until the semantics are settled.
+//
+// They live in their own directory so `prepublishOnly` can gate on the shipped
+// suite without that decision being a vote on A2/A4. `pnpm test` still runs
+// them and is still red: a developer should see this, a release should not be
+// blocked by it forever. `pnpm run test:adversarial` runs only these.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import pg from 'pg';
 
-import { record, recordMany, queryUsage } from '../src/events';
-import { post, balance, accrualPosting, paymentPosting, entries } from '../src/ledger';
-import { Money, Quantity, price, Rate, allocate } from '../src/money';
-import { fromPool } from './pg-executor';
+import { record, recordMany, queryUsage } from '../../src/events';
+import { post, balance, accrualPosting, paymentPosting, entries } from '../../src/ledger';
+import { Money, Quantity, price, Rate, allocate } from '../../src/money';
+import { fromPool } from '../pg-executor';
 
 // Not `URL`: that name shadows the global URL constructor used below.
 const DB_URL = process.env.BILLING_KIT_TEST_DATABASE_URL ?? 'postgres://localhost:5432/bk_core_attack';
@@ -16,7 +27,7 @@ const now = new Date();
 
 test.before(async () => {
   const { readFile } = await import('node:fs/promises');
-  const ddl = await readFile(new URL('../sql/001_core.sql', import.meta.url), 'utf8');
+  const ddl = await readFile(new URL('../../sql/001_core.sql', import.meta.url), 'utf8');
   await pool.query('DROP SCHEMA IF EXISTS billing CASCADE');
   await pool.query(ddl);
   await pool.query('SELECT billing.ensure_core_partitions(2, $1)', [now]);

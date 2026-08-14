@@ -3,31 +3,90 @@
   "version": "0.1.0",
   "description": "Usage-based billing as a library, over a provider you choose.",
   "license": "Apache-2.0",
+  "author": "BRETT",
   "type": "module",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+http://localhost:3003/brett/billing-kit.git"
+  },
+  "homepage": "http://localhost:3003/brett/billing-kit#readme",
+  "bugs": {
+    "url": "http://localhost:3003/brett/billing-kit/issues"
+  },
+  "keywords": [
+    "billing",
+    "usage-based-billing",
+    "metering",
+    "usage-metering",
+    "double-entry",
+    "ledger",
+    "invoicing",
+    "subscriptions",
+    "stripe",
+    "paddle",
+    "lago",
+    "postgres",
+    "typescript"
+  ],
   "engines": {
-    "node": ">=22.6.0"
+    "node": ">=20.19.0"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./providers": "./src/providers/index.ts",
-    "./metering": "./src/metering/index.ts",
-    "./sql": "./sql/"
+    ".": {
+      "types": {
+        "import": "./dist/index.d.ts",
+        "require": "./dist/index.d.cts"
+      },
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./providers": {
+      "types": {
+        "import": "./dist/providers/index.d.ts",
+        "require": "./dist/providers/index.d.cts"
+      },
+      "import": "./dist/providers/index.mjs",
+      "require": "./dist/providers/index.cjs"
+    },
+    "./metering": {
+      "types": {
+        "import": "./dist/metering/index.d.ts",
+        "require": "./dist/metering/index.d.cts"
+      },
+      "import": "./dist/metering/index.mjs",
+      "require": "./dist/metering/index.cjs"
+    },
+    "./sql/*": "./sql/*",
+    "./package.json": "./package.json"
   },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
   "files": [
-    "src",
+    "dist",
     "sql",
     "LICENSE",
     "NOTICE",
     "README.md"
   ],
   "scripts": {
+    "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test --test-concurrency=1 test/*.test.ts"
+    "test": "pnpm run test:unit && pnpm run test:adversarial",
+    "test:unit": "tsx --test --test-concurrency=1 test/*.test.ts",
+    "test:adversarial": "tsx --test --test-concurrency=1 test/adversarial/*.test.ts",
+    "test:pack": "tsx --test scripts/verify-pack.ts",
+    "prepublishOnly": "pnpm run build && pnpm run test:unit && pnpm run typecheck && pnpm run test:pack"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
     "@types/pg": "^8.21.0",
     "pg": "^8.23.0",
+    "tsup": "^8.5.1",
     "tsx": "^4.19.2",
     "typescript": "^5.9.2"
   }

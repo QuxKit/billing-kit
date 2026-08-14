@@ -56,8 +56,26 @@ root, so an application using one does not compile the others. Import
 `billing-kit/metering` for the batch driver and `billing-kit/providers` for the
 adapter interface and its two implementations.
 
-The ledger and money tests run against a real Postgres. The current suite is
-green; `pnpm test` reproduces it.
+The ledger and money tests run against a real Postgres, and `pnpm run test:unit`
+is green.
+
+`pnpm test` is **not**, and that is deliberate. It also runs
+`test/adversarial/`, four of whose probes fail because they name real defects
+that are still open — read them before building anything that depends on a
+replay being safe:
+
+| | What is wrong today |
+|---|---|
+| **A2** | A replay carrying a *different* quantity is reported as a duplicate |
+| **A4** | A ledger replay with different legs returns the old transaction; the corrected amount is silently discarded |
+| **A5** | A late payment webhook cannot be posted — no partition, no default |
+| **A8** | `allocate()` is documented as largest-remainder and is not |
+
+A2 and A4 are the ones that matter for money: a correction that vanishes
+without an error is a revenue discrepancy nobody can trace back. They stay red
+until the semantics are settled, because a red test that names a defect is
+worth more than a green suite that hides one. `prepublishOnly` gates on
+`test:unit` so that choice does not double as a permanent publish block.
 
 ## What it does itself, and will not delegate
 
@@ -293,8 +311,17 @@ all. Nothing fails and nothing warns; you find out at a hundred million rows.
 ```
 pnpm install
 pnpm typecheck
-pnpm test
+pnpm run test:unit         # the shipped suite — green
+pnpm run test:adversarial  # the open defects — red, on purpose
+pnpm build                 # dist/, ESM + CJS + declarations
+pnpm run test:pack         # packs, installs the tarball, drives it with plain node
 ```
+
+`test:pack` is the only check that says anything about what a consumer gets. It
+runs `npm pack`, installs the tarball into a temporary directory sharing no
+`node_modules` with this repo, and imports it from both ESM and CJS with no
+loader — because an `exports` map is not code anyone runs, and the only way to
+know it is right is to resolve against it from outside.
 
 The money tests are pure and always run. The ingest and ledger tests need a
 Postgres, and skip with a message when there is not one:
