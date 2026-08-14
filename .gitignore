@@ -1,4 +1,7 @@
-node_modules/
+# No trailing slash: with one, this matches a directory but not a *symlink*
+# named node_modules, which is how a worktree usually gets its dependencies —
+# and git then happily commits the link.
+node_modules
 dist/
 .env
 *.log
