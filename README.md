@@ -41,6 +41,42 @@ it is the only place Stripe, Paddle and Lago agree on what an operation means.
 Apache-2.0, so that both an AGPL open core and a commercial hosted service can
 depend on it.
 
+## The problem it solves
+
+Usage-based billing usually arrives in one of two shapes, and both put the logic
+somewhere you don't control:
+
+- **A hosted platform** — Metronome, Orb, Stripe Billing — that meters and
+  invoices for you, and takes a **percentage of revenue you already earned**.
+- **A service you deploy** — Lago, OpenMeter, Kill Bill — that you stand up and
+  operate as a **separate system**, with its own database, API and failure modes.
+
+billing-kit is a third shape: **a library you embed.** You `import` metering,
+pricing and a double-entry ledger into the app you already run, riding on the
+payment provider you already use (Stripe, Paddle). No cut of your revenue, and no
+second service to operate.
+
+|  | What it costs you | Where your billing logic lives |
+|---|---|---|
+| Hosted platform | a % of billed revenue, forever | their servers |
+| OSS platform | ops: a service to run | a separate system you operate |
+| **billing-kit** | **a dependency** | **in-process, your tables** |
+
+What owning it in-process buys you:
+
+- **No platform tax.** The pricing tables and the financial record are *your*
+  tables — nobody takes a cut to compute a number.
+- **Answerable numbers.** Integer minor units, the ISO 4217 exponent table and an
+  append-only double-entry ledger make every amount re-derivable: you can answer
+  *"why is this number"* offline, from your own data, at any time.
+- **A dependency, not infrastructure.** No container, no second Postgres+API to
+  stand up. It compiles into your service.
+
+It is not the first open-source billing project, and it does not try to be a
+platform. It is billing as a small, correct, embeddable dependency — the thing
+missing between *rent it and pay a percentage* and *deploy and operate a second
+system*. Everything below is how it earns the word "correct."
+
 ## Status
 
 | Module | Entry point | State |
