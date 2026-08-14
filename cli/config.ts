@@ -97,16 +97,43 @@ export interface InitResult {
  */
 export async function detectTypeScript(cwd: string): Promise<boolean> {
   if (await exists(path.join(cwd, 'tsconfig.json'))) return true;
+  const pkg = await readPackageJson(cwd);
+  return Boolean(pkg?.dependencies?.typescript ?? pkg?.devDependencies?.typescript);
+}
 
+interface PackageJson {
+  type?: string;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+}
+
+async function readPackageJson(cwd: string): Promise<PackageJson | null> {
   try {
-    const pkg = JSON.parse(await readFile(path.join(cwd, 'package.json'), 'utf8')) as {
-      dependencies?: Record<string, string>;
-      devDependencies?: Record<string, string>;
-    };
-    return Boolean(pkg.dependencies?.typescript ?? pkg.devDependencies?.typescript);
+    return JSON.parse(await readFile(path.join(cwd, 'package.json'), 'utf8')) as PackageJson;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/**
+ * Which extension the template can actually be imported back through.
+ *
+ * The template is ESM — it ends in `export default`, because that is what
+ * `loadConfig` imports and what lets `databaseUrl` be an env read rather than a
+ * committed credential. Whether a `.js` file is ESM is not a property of the
+ * file: it is `"type"` in the nearest package.json, and the default is
+ * `commonjs`. So `.js` in an ordinary project is parsed as CommonJS and dies on
+ * the word `export` — `init` succeeds and every command after it fails, which
+ * is exactly the trap this function exists to avoid.
+ *
+ * `.mjs` is ESM unconditionally, so it is the safe answer whenever `"type":
+ * "module"` is not set. `.ts` needs one more thing: the CLI is built JavaScript
+ * run by `node` with no loader, so it can only import a `.ts` config on a
+ * runtime that strips types.
+ */
+export async function configExtension(cwd: string): Promise<'.ts' | '.js' | '.mjs'> {
+  if ((await detectTypeScript(cwd)) && process.features.typescript) return '.ts';
+  return (await readPackageJson(cwd))?.type === 'module' ? '.js' : '.mjs';
 }
 
 /**
@@ -117,7 +144,7 @@ export async function detectTypeScript(cwd: string): Promise<boolean> {
  * template is a data loss that looks like a successful command.
  */
 export async function writeInitConfig(cwd: string): Promise<InitResult> {
-  const filename = (await detectTypeScript(cwd)) ? 'billing.config.ts' : 'billing.config.js';
+  const filename = `billing.config${await configExtension(cwd)}`;
   const target = path.join(cwd, filename);
 
   for (const candidate of CANDIDATES) {
@@ -163,6 +190,23 @@ export async function loadConfig(cwd: string, explicitPath?: string): Promise<Lo
   }
 
   if (!resolved) return { config: {}, path: null };
+
+  // A `.ts` config is the adopter's own code and is loaded with a plain dynamic
+  // import, so it needs a runtime that strips types: Node ≥22.18 by default,
+  // 22.6–22.17 under `--experimental-strip-types`. The CLI cannot turn that on
+  // for itself, and the failure without this check is a SyntaxError pointing at
+  // a type annotation in a file the user believes is valid — true, and useless.
+  if (/\.m?ts$/.test(resolved) && !process.features.typescript) {
+    throw new CliError(`cannot load ${path.basename(resolved)} on ${process.version}`, [
+      'This node does not strip types, so a TypeScript config file cannot be imported.',
+      '',
+      'Any one of these:',
+      '  • rename it to billing.config.js and use `export default` — the file is',
+      '    plain data, so nothing is lost',
+      '  • run with --experimental-strip-types (node 22.6 and later)',
+      '  • upgrade to node 22.18 or later, where stripping is on by default',
+    ]);
+  }
 
   let module: unknown;
   try {

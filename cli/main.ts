@@ -39,7 +39,7 @@ const USAGE = `billing-kit — usage-based billing as a library, over a provider
 Usage: billing-kit <command> [options]
 
 Commands:
-  init            write billing.config.ts (or .js) in the current directory
+  init            write billing.config.{ts,mjs,js} in the current directory
   migrate         apply pending SQL migrations, in order, once each
   status          show which migrations are applied and which are pending
 

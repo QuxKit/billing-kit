@@ -1,9 +1,14 @@
 // CLI tests.
 //
-// These spawn `bin/billing-kit.mjs` as a child process rather than calling
-// `run()` in-process. The launcher, the type stripping, the exit status and the
-// text on stderr are the whole product here — a test that imported the module
-// would exercise none of them and would still pass if `bin/` were deleted.
+// These spawn the built binary as a child process rather than calling `run()`
+// in-process. The exit status and the text on stderr are the whole product
+// here — a test that imported the module would exercise neither, and would
+// still pass if the bin were unreachable.
+//
+// `dist/cli.mjs` and not `cli/bin.ts`, for the same reason. npm points `bin` at
+// the built file and runs it under plain `node`: no loader, no tsconfig, no
+// bundler. Testing the source through tsx would test a program nobody runs.
+// `pretest:unit` builds, so this is always the current source.
 //
 // The migration tests create and drop their own database. They do not touch any
 // existing one: a tool whose failure mode is "applied the wrong DDL somewhere"
@@ -28,7 +33,7 @@ import { after, before, describe, it } from 'node:test';
 import pg from 'pg';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
-const BIN = path.join(REPO, 'bin', 'billing-kit.mjs');
+const BIN = path.join(REPO, 'dist', 'cli.mjs');
 
 /**
  * Where CREATE DATABASE is issued from. `postgres` is the maintenance database
@@ -160,6 +165,43 @@ describe('billing-kit init', () => {
     await assert.rejects(readFile(path.join(dir, 'billing.config.ts'), 'utf8'));
   });
 
+  it('writes .mjs, not .js, in a project that is not type: module', async () => {
+    // The bug this pins, found by installing the tarball and running `init` in
+    // a plain `npm init -y` project: the template ends in `export default`, and
+    // whether a `.js` file may say that is not a property of the file — it is
+    // `"type"` in the nearest package.json, defaulting to commonjs. `init`
+    // wrote billing.config.js, exited 0, printed the file, and every command
+    // after it died on `Unexpected token 'export'`.
+    //
+    // A scaffolding command that succeeds and leaves the project broken is
+    // worse than one that refuses, because the error surfaces later and points
+    // at the file rather than at the command that wrote it.
+    const dir = await temp('init-cjs');
+    await writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'x' }));
+
+    const r = cli(['init'], dir);
+    assert.equal(r.status, 0, r.stderr);
+    await assert.doesNotReject(readFile(path.join(dir, 'billing.config.mjs'), 'utf8'));
+    await assert.rejects(readFile(path.join(dir, 'billing.config.js'), 'utf8'));
+
+    // And it is loadable, which is the actual claim — writing the right
+    // extension is only worth anything if the file imports back. No
+    // --database-url, so the only place the url can come from is the template's
+    // `process.env.DATABASE_URL` read, which requires the module to have been
+    // evaluated.
+    const restore = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = 'postgres://localhost:1/from-the-mjs';
+    try {
+      const after = cli(['status'], dir);
+      assert.doesNotMatch(after.stderr, /Unexpected token/, 'the config was parsed as CommonJS');
+      assert.doesNotMatch(after.stderr, /cannot load/);
+      assert.match(after.stdout + after.stderr, /from-the-mjs/);
+    } finally {
+      if (restore === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = restore;
+    }
+  });
+
   it('refuses to clobber an existing config and exits non-zero', async () => {
     const dir = await temp('init-clobber');
     await writeFile(path.join(dir, 'tsconfig.json'), '{}');
@@ -237,14 +279,16 @@ describe('billing-kit config', () => {
     // A copy of the package with no node_modules. This is what an adopter who
     // installed billing-kit and no driver actually has, and the failure has to
     // be a sentence rather than a resolution stack trace.
+    // What ships, and nothing else: dist/, sql/ and the manifest. Copying src/
+    // or cli/ here would be testing a tree no adopter has.
     const dir = await temp('no-pg');
-    for (const entry of ['bin', 'cli', 'src', 'sql', 'package.json']) {
+    for (const entry of ['dist', 'sql', 'package.json']) {
       await cp(path.join(REPO, entry), path.join(dir, entry), { recursive: true });
     }
 
     const r = spawnSync(
       process.execPath,
-      [path.join(dir, 'bin', 'billing-kit.mjs'), 'status', '--database-url', 'postgres://localhost:1/x'],
+      [path.join(dir, 'dist', 'cli.mjs'), 'status', '--database-url', 'postgres://localhost:1/x'],
       { cwd: dir, encoding: 'utf8' },
     );
     assert.equal(r.status, 1, r.stdout);
