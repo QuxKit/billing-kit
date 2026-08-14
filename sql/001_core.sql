@@ -4,21 +4,22 @@
 -- touch. Aggregates, charges, prices and the metering engine's own objects
 -- live in their own numbered file, so the two can be reviewed apart.
 --
--- UNRESOLVED, and it must be resolved before either file is applied anywhere
--- real: `sql/001_metering.sql` declares its own `billing.ledger_entries` with
--- a different shape (`account_id uuid` referencing a `ledger_accounts` table,
--- `leg text` constrained to debit/credit, `source_id uuid`). This file
--- declares `subject_id`, `account text`, `leg_no smallint`, `source_id text`.
--- Both use CREATE TABLE IF NOT EXISTS, so applying both does not error on the
--- table: the second one silently does nothing and then its indexes fail on
--- columns that do not exist. Verified by applying the two in order.
+-- RESOLVED: `billing.ledger_entries` is declared here and nowhere else.
+-- `sql/010_metering.sql` used to declare a second, incompatible version of the
+-- same table (`account_id uuid` into a `ledger_accounts` row, `leg text`
+-- constrained to debit/credit, `source_id uuid`) and both used CREATE TABLE IF
+-- NOT EXISTS, so applying both did not error on the table — the second one
+-- silently did nothing and its indexes then failed on columns that did not
+-- exist. That is exactly the failure PROVENANCE.md records against the
+-- reference application: two DDLs for one table, only one of which can be the
+-- deployed shape.
 --
--- That is precisely the failure PROVENANCE.md records against the reference
--- application — two DDLs for one table, only one of which can be the deployed
--- shape. One of the two definitions has to win. Note when choosing that
+-- This shape won, for two reasons. It matches the `LedgerEntry` interface in
+-- src/types.ts, which is the library's declared public vocabulary; and
 -- `leg IN ('debit','credit')` cannot express the three-legged settlement
 -- posting in docs/ARCHITECTURE.md §4.4, where a provider total differing from
--- the accrued total posts accrued, settled and variance.
+-- the accrued total posts accrued, settled and variance. `sql/012_meter_batch.sql`
+-- was migrated onto these columns.
 --
 -- Everything is in a `billing` schema. A host application's `usage_events` and
 -- ours must not be able to collide, and a `search_path` change must not be able
@@ -152,8 +153,21 @@ CREATE TABLE IF NOT EXISTS billing.ledger_entries (
 CREATE INDEX IF NOT EXISTS ledger_entries_transaction_idx
   ON billing.ledger_entries (transaction_id);
 
+-- Serves `balance()` in src/ledger.ts and the balance guard in
+-- sql/012_meter_batch.sql, which are the same query: SUM(amount_minor) over one
+-- (tenant, subject, account, currency).
+--
+-- amount_minor is INCLUDEd rather than left to a heap fetch, so the aggregate
+-- can be satisfied from the index alone. Verified from EXPLAIN (ANALYZE,
+-- BUFFERS) on PostgreSQL 17: Index Only Scan, Heap Fetches: 0.
+--
+-- The reason it is worth an INCLUDE at all is that a balance is DERIVED by
+-- summing an account's whole history — there is no cached total anywhere, by
+-- decision — so the cost is linear in that history and every constant factor
+-- comes off a number that grows forever.
 CREATE INDEX IF NOT EXISTS ledger_entries_balance_idx
-  ON billing.ledger_entries (tenant_id, subject_id, account, currency, posted_at);
+  ON billing.ledger_entries (tenant_id, subject_id, account, currency, posted_at)
+  INCLUDE (amount_minor);
 
 -- ---------------------------------------------------------------------------
 -- Append-only enforcement
@@ -202,26 +216,161 @@ $$;
 -- Partitions
 -- ---------------------------------------------------------------------------
 
--- Create the month partition covering `at`, plus its per-partition triggers.
+-- Attach the per-partition triggers.
 --
 -- Triggers are attached per partition rather than to the parent because
 -- Postgres does not allow a BEFORE ROW trigger or a CONSTRAINT TRIGGER on a
 -- partitioned table. Attaching them here means a partition created by any route
--- other than this function silently loses both the append-only guarantee and
+-- other than these functions silently loses both the append-only guarantee and
 -- the balance check — which is the failure the health check looks for.
+CREATE OR REPLACE FUNCTION billing.attach_partition_triggers(
+  p_parent text,
+  p_child  text
+) RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+  EXECUTE format(
+    'CREATE TRIGGER %I BEFORE UPDATE OR DELETE ON billing.%I
+       FOR EACH ROW EXECUTE FUNCTION billing.reject_mutation()',
+    p_child || '_append_only', p_child
+  );
+
+  IF p_parent = 'ledger_entries' THEN
+    EXECUTE format(
+      'CREATE CONSTRAINT TRIGGER %I AFTER INSERT ON billing.%I
+         DEFERRABLE INITIALLY DEFERRED
+         FOR EACH ROW EXECUTE FUNCTION billing.assert_transaction_balanced()',
+      p_child || '_balanced', p_child
+    );
+  END IF;
+END;
+$$;
+
+/*
+ * The DEFAULT partition. A safety net, not a destination.
+ *
+ * Every range-partitioned table here gets one, because the alternative is that
+ * a row outside every declared range cannot be stored at all: Postgres raises
+ * "no partition of relation ... found for row" and the insert fails. For
+ * ledger_entries that means a real payment — a webhook retried for four days, a
+ * reconciliation job backfilling a quarter, a dead-letter queue replayed —
+ * cannot be recorded. Money must never be rejected for want of a partition.
+ * For usage_events it means billable usage on the floor for the same reason;
+ * both tables had the hole and both are fixed here.
+ *
+ * Rows accumulating in a default partition are a SIGNAL, not a steady state.
+ * They mean the partition maintenance below has not run far enough ahead or far
+ * enough behind, and the count is reported by billing.partition_report() and
+ * raised as a `default_partition_not_empty` fault by billing.metering_health()
+ * (sql/011_partitions.sql) so it is an alert weeks early rather than a surprise.
+ *
+ * The cost is real and is why the report exists: while a default partition is
+ * NON-EMPTY, creating the next month's partition has to reconcile it, holding
+ * ACCESS EXCLUSIVE for the duration. billing.ensure_month_partition below does
+ * that reconciliation rather than failing, which is the difference between a
+ * pause and an outage.
+ */
+CREATE OR REPLACE FUNCTION billing.ensure_default_partition(
+  p_parent regclass
+) RETURNS text
+LANGUAGE plpgsql AS $$
+DECLARE
+  v_parent text;
+  v_child  text;
+BEGIN
+  SELECT c.relname INTO v_parent FROM pg_class c WHERE c.oid = p_parent;
+  v_child := v_parent || '_default';
+
+  IF to_regclass('billing.' || quote_ident(v_child)) IS NOT NULL THEN
+    RETURN v_child;
+  END IF;
+
+  EXECUTE format('CREATE TABLE billing.%I PARTITION OF %s DEFAULT', v_child, p_parent::text);
+  PERFORM billing.attach_partition_triggers(v_parent, v_child);
+
+  RETURN v_child;
+END;
+$$;
+
+/*
+ * Create the month partition covering `p_at`, and move into it anything the
+ * default partition is already holding for that month.
+ *
+ * The move is not an optimisation. `CREATE TABLE ... PARTITION OF` fails
+ * outright — "updated partition constraint for default partition would be
+ * violated by some row" — when the default holds a row that belongs in the new
+ * range. So the first late payment to land in the default would break every
+ * subsequent call of this function, permanently, and the failure would surface
+ * as a cron job that stopped creating partitions rather than as anything to do
+ * with the payment. The whole point of the default partition is to keep a row
+ * that has nowhere else to go; a maintenance path that then cannot cope with
+ * that row would hand the outage back with interest.
+ *
+ * The sequence, all in the caller's transaction so a failure leaves nothing
+ * half-done:
+ *
+ *   1. detach the default, so creating the new partition does not have to
+ *      validate against it at all;
+ *   2. create the new month partition and attach its triggers;
+ *   3. move the rows the default holds for that month into it;
+ *   4. re-attach the default, which validates the (now correct) remainder.
+ *
+ * Step 3 has to DELETE from the default, and the default carries the same
+ * append-only trigger as every other partition — so the trigger is disabled for
+ * the duration and re-enabled before the transaction commits. That is not a
+ * hole in the guarantee: DISABLE TRIGGER needs table ownership, the window is
+ * inside one transaction that holds ACCESS EXCLUSIVE on the table, and the rows
+ * are not changed, only relocated to the address they should have had. The
+ * alternative — leaving the default untriggered so the move is possible — would
+ * mean the one partition rows land in unexpectedly is the one partition anybody
+ * can quietly edit.
+ */
 CREATE OR REPLACE FUNCTION billing.ensure_month_partition(
   p_parent regclass,
   p_at     timestamptz
 ) RETURNS text
 LANGUAGE plpgsql AS $$
 DECLARE
-  v_start   timestamptz := date_trunc('month', p_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
-  v_end     timestamptz := v_start + interval '1 month';
-  v_parent  text := replace(p_parent::text, 'billing.', '');
-  v_child   text := format('%s_%s', v_parent, to_char(v_start AT TIME ZONE 'UTC', 'YYYYMM'));
+  -- Both boundaries come from ONE plain `timestamp` in UTC, and the month is
+  -- added to that timestamp before it is labelled +00.
+  --
+  -- Writing it the obvious way — v_end := v_start + interval '1 month' with
+  -- v_start a timestamptz — is wrong, and it was wrong here. Adding a month to
+  -- a timestamptz resolves the calendar in the SESSION's TimeZone, so a start
+  -- of 2026-07-01T00:00Z (which is 2026-06-30 19:00 in America/Chicago) plus
+  -- one month is 2026-07-30 19:00 local = 2026-07-31T00:00Z. The July partition
+  -- then ended a day before the August partition began, and every row posted
+  -- during that day belonged to no partition at all.
+  v_month   timestamp   := date_trunc('month', p_at AT TIME ZONE 'UTC');
+  v_start   timestamptz := v_month AT TIME ZONE 'UTC';
+  v_end     timestamptz := (v_month + interval '1 month') AT TIME ZONE 'UTC';
+  v_parent  text;
+  v_child   text;
+  v_default text;
+  v_key     text;
+  v_moved   bigint := 0;
 BEGIN
+  SELECT c.relname INTO v_parent FROM pg_class c WHERE c.oid = p_parent;
+
+  -- `YYYYmMM`, matching the names sql/011_partitions.sql produces for
+  -- `charges`. One convention across the schema, because billing.metering_health()
+  -- measures partition runway by comparing these names.
+  v_child   := format('%s_%s', v_parent, to_char(v_month, 'YYYY"m"MM'));
+  v_default := v_parent || '_default';
+
   IF to_regclass('billing.' || quote_ident(v_child)) IS NOT NULL THEN
     RETURN v_child;
+  END IF;
+
+  -- Asked of the catalog rather than hardcoded per table: `occurred_at` for
+  -- usage_events, `posted_at` for ledger_entries, `window_start` for charges.
+  SELECT a.attname INTO v_key
+    FROM pg_partitioned_table pt
+    JOIN pg_attribute a ON a.attrelid = pt.partrelid AND a.attnum = pt.partattrs[0]
+   WHERE pt.partrelid = p_parent;
+
+  IF to_regclass('billing.' || quote_ident(v_default)) IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE %s DETACH PARTITION billing.%I', p_parent::text, v_default);
   END IF;
 
   EXECUTE format(
@@ -229,19 +378,32 @@ BEGIN
     v_child, p_parent::text, v_start, v_end
   );
 
-  EXECUTE format(
-    'CREATE TRIGGER %I BEFORE UPDATE OR DELETE ON billing.%I
-       FOR EACH ROW EXECUTE FUNCTION billing.reject_mutation()',
-    v_child || '_append_only', v_child
-  );
+  PERFORM billing.attach_partition_triggers(v_parent, v_child);
 
-  IF v_parent = 'ledger_entries' THEN
+  IF to_regclass('billing.' || quote_ident(v_default)) IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE billing.%I DISABLE TRIGGER %I',
+                   v_default, v_default || '_append_only');
+
+    -- One statement, so the rows cannot exist in both places or in neither.
+    -- Inserted through the PARENT rather than straight into the child, so
+    -- partition routing decides where each row goes and this function never has
+    -- to be right about the boundary twice.
     EXECUTE format(
-      'CREATE CONSTRAINT TRIGGER %I AFTER INSERT ON billing.%I
-         DEFERRABLE INITIALLY DEFERRED
-         FOR EACH ROW EXECUTE FUNCTION billing.assert_transaction_balanced()',
-      v_child || '_balanced', v_child
+      'WITH moved AS (
+         DELETE FROM billing.%I WHERE %I >= %L AND %I < %L RETURNING *
+       )
+       INSERT INTO %s SELECT * FROM moved',
+      v_default, v_key, v_start, v_key, v_end, p_parent::text
     );
+    GET DIAGNOSTICS v_moved = ROW_COUNT;
+
+    EXECUTE format('ALTER TABLE billing.%I ENABLE TRIGGER %I',
+                   v_default, v_default || '_append_only');
+    EXECUTE format('ALTER TABLE %s ATTACH PARTITION billing.%I DEFAULT', p_parent::text, v_default);
+
+    IF v_moved > 0 THEN
+      RAISE NOTICE 'billing: moved % row(s) from % into %', v_moved, v_default, v_child;
+    END IF;
   END IF;
 
   RETURN v_child;
@@ -249,26 +411,66 @@ END;
 $$;
 
 -- Partitions are created ahead, never lazily on an insert failure. A missing
--- partition makes every insert into that range fail, and for usage_events that
--- means billable usage on the floor. Three weeks of headroom turns that into an
--- alert rather than an incident at midnight on the first of the month.
+-- partition sends every insert in that range to the default, and a default that
+-- fills up is an ACCESS EXCLUSIVE reconciliation at month end instead of a
+-- no-op. Three weeks of headroom turns that into an alert rather than an
+-- incident at midnight on the first of the month.
+--
+-- Returns how many partitions were actually created, counted from the catalog
+-- rather than from how many times the loop went round. A non-zero return from a
+-- run that was not expected to create anything means the previous runs were not
+-- happening, and that is only worth logging if the number is true.
 CREATE OR REPLACE FUNCTION billing.ensure_core_partitions(
   p_months_ahead integer DEFAULT 3,
   p_now          timestamptz DEFAULT now()
 ) RETURNS integer
 LANGUAGE plpgsql AS $$
 DECLARE
+  v_before  integer;
+  v_after   integer;
   v_created integer := 0;
   v_month   integer;
+  v_parent  regclass;
 BEGIN
-  -- Starts at -1 so a late event for last month still has somewhere to land.
-  FOR v_month IN -1 .. p_months_ahead LOOP
-    PERFORM billing.ensure_month_partition(
-      'billing.usage_events'::regclass, p_now + (v_month || ' month')::interval);
-    PERFORM billing.ensure_month_partition(
-      'billing.ledger_entries'::regclass, p_now + (v_month || ' month')::interval);
-    v_created := v_created + 2;
+  FOREACH v_parent IN ARRAY ARRAY['billing.usage_events'::regclass,
+                                  'billing.ledger_entries'::regclass] LOOP
+    SELECT count(*) INTO v_before FROM pg_inherits WHERE inhparent = v_parent;
+
+    -- The default first, so that from here on there is no instant at which a
+    -- row for an unexpected month has nowhere to go.
+    PERFORM billing.ensure_default_partition(v_parent);
+
+    -- Starts at -1 so a late event for last month still has a partition of its
+    -- own rather than the default.
+    FOR v_month IN -1 .. p_months_ahead LOOP
+      PERFORM billing.ensure_month_partition(
+        v_parent, p_now + (v_month || ' month')::interval);
+    END LOOP;
+
+    SELECT count(*) INTO v_after FROM pg_inherits WHERE inhparent = v_parent;
+    v_created := v_created + (v_after - v_before);
   END LOOP;
+
   RETURN v_created;
 END;
 $$;
+
+-- Call it once, here, so the schema is usable the moment it exists.
+--
+-- Without this line the file defines the function and never runs it, and a
+-- freshly migrated database has NO partitions at all — not the month ones and
+-- not the defaults. Every insert into usage_events and ledger_entries fails
+-- with "no partition of relation ... found for row" until somebody knows to
+-- call this by hand. That is the same defect adversarial case A5 names, moved
+-- from four months ago to the first minute: money rejected for want of a
+-- partition, with the schema reporting itself as fully migrated.
+--
+-- The DEFAULT partitions are the part that matters here. The month window will
+-- run out — that is what the scheduled call in docs/OPERATIONS.md is for — but
+-- a default that exists from the first statement means running out is a row in
+-- the wrong place rather than a rejected write.
+--
+-- Idempotent, so re-running this file is a no-op: ensure_default_partition and
+-- ensure_month_partition both return early when their partition is there, and
+-- `billing-kit migrate` applies each file once in any case.
+SELECT billing.ensure_core_partitions();

@@ -1,19 +1,28 @@
 // Adversarial probes of the core money paths.
 //
-// These are red on purpose. Each failure names a real defect in the shipped
-// code — A2 and A4 in particular, where a replay carrying a *different* amount
-// is reported as a boring duplicate and the correction is silently discarded.
-// A red test that names a defect is worth more than a green suite that hides
-// one, so they stay, and they stay failing until the semantics are settled.
+// These were red on purpose, and four of them stayed red for a while: a test
+// that names a defect is worth more than a green suite that hides one. What
+// they found — A2 and A4, a replay carrying a different amount reported as a
+// boring duplicate with the correction silently discarded; A5, a real payment
+// that could not be recorded at all; A8, an allocation that gave a penny to
+// whoever sorted first — is written up case by case below.
 //
-// They live in their own directory so `prepublishOnly` can gate on the shipped
-// suite without that decision being a vote on A2/A4. `pnpm test` still runs
-// them and is still red: a developer should see this, a release should not be
-// blocked by it forever. `pnpm run test:adversarial` runs only these.
+// They are green now, all eight, and `prepublishOnly` gates on the whole suite
+// again — the split existed only because these were red, and that reason is
+// gone. They stay in their own directory because they are a different kind of
+// test: the unit suite checks that a decision was implemented, and these ask
+// what an adversary can get the system to do. Keeping them apart means a future
+// red one is legible as "something can be attacked" rather than as a failure
+// somewhere in the pile. `pnpm run test:adversarial` runs only these.
+//
+// A case name here describes what the probe FOUND, in the past tense where the
+// defect is fixed. Renaming them to describe the fix would lose the record of
+// what was once true, which is the more useful half.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import pg from 'pg';
 
+import { BillingError } from '../../src/errors';
 import { record, recordMany, queryUsage } from '../../src/events';
 import { post, balance, accrualPosting, paymentPosting, entries } from '../../src/ledger';
 import { Money, Quantity, price, Rate, allocate } from '../../src/money';
@@ -53,21 +62,38 @@ test('A1: two metrics from one request id — the second is silently discarded',
   assert.equal(stored.length, 2, '5000 tokens of billable usage; only 1000 was stored');
 });
 
-test('A2: replay with a DIFFERENT quantity is reported as a duplicate', async () => {
+test('A2: replay with a DIFFERENT quantity is refused, not called a duplicate', async () => {
+  // Was: the second call hit the dedupe key, took the duplicate branch and
+  // returned `deduplicated: true` — success, for a request never performed,
+  // leaving 10 billed where 1,000,000 was sent.
+  //
+  // Now: refused. Keeping the stored value discards a correction and
+  // overwriting it lets a stale retry clobber one; the two cannot be told apart
+  // from inside record(), so neither is chosen and the caller is told.
   const base = {
     tenantId: 't', subjectId: 's2', source: 'gateway', externalId: 'req-A2',
     metric: 'tokens.input', occurredAt: now,
   };
   await record(db, { ...base, quantity: Quantity.fromBigInt(10n) }, now);
-  const second = await record(db, { ...base, quantity: Quantity.fromBigInt(1_000_000n) }, now);
-  console.log('  second call ->', second);
 
+  await assert.rejects(
+    () => record(db, { ...base, quantity: Quantity.fromBigInt(1_000_000n) }, now),
+    (e: unknown) => BillingError.hasCode(e, 'idempotency_conflict'),
+    'a payload change must not be reported as a boring retry',
+  );
+
+  // And the refusal changed nothing: the first quantity is still the only one.
   const stored = await queryUsage(db, {
     tenantId: 't', subjectId: 's2',
     window: { start: new Date(now.getTime() - 86400e3), end: new Date(now.getTime() + 86400e3) },
   });
-  console.log('  stored quantity:', stored[0]?.quantity.toDecimalString());
-  assert.equal(second.deduplicated, false, 'a payload change should not be reported as a boring retry');
+  assert.equal(stored.length, 1);
+  assert.equal(Number(stored[0]!.quantity.toDecimalString()), 10);
+
+  // An identical retry is still boring, which is the contract the refusal must
+  // not have broken.
+  const same = await record(db, { ...base, quantity: Quantity.fromBigInt(10n) }, now);
+  assert.equal(same.deduplicated, true);
 });
 
 test('A3: same external id, DIFFERENT subject — charged to the wrong customer / dropped', async () => {
@@ -82,7 +108,18 @@ test('A3: same external id, DIFFERENT subject — charged to the wrong customer 
   assert.equal(bobRows.length, 1, "bob's usage vanished into alice's dedupe key");
 });
 
-test('A4: ledger replay with different legs silently returns the OLD transaction', async () => {
+test('A4: ledger replay with different legs is refused, not silently discarded', async () => {
+  // Was: the $500.00 posting hit the idempotency key, returned the $5.00
+  // transaction with `deduplicated: true`, and wrote nothing. The caller was
+  // told it succeeded and the $500.00 was gone — no failed row, no error, and a
+  // transaction that looks perfectly well formed. It surfaces later as a
+  // balance that disagrees with the provider's, with nothing to follow back.
+  //
+  // Now: refused. Note what the fix is NOT — the correction is not applied
+  // either. A ledger is append-only; correcting a posted transaction is a
+  // reversing entry and a new posting, both of which stay visible. Overwriting
+  // in place would destroy the audit trail that is the reason to keep a
+  // double-entry ledger at all.
   const p1 = accrualPosting({
     tenantId: 't', subjectId: 's4', chargeId: 'charge-A4',
     amount: Money.fromDecimalString('5.00', 'USD'),
@@ -93,22 +130,67 @@ test('A4: ledger replay with different legs silently returns the OLD transaction
     tenantId: 't', subjectId: 's4', chargeId: 'charge-A4',
     amount: Money.fromDecimalString('500.00', 'USD'),
   });
-  const r2 = await post(db, p2, now);
-  console.log('  replay deduplicated =', r2.deduplicated,
-    'entries =', r2.entries.map((e) => `${e.account}:${e.amount.toDecimalString()}`));
+
+  await assert.rejects(
+    () => post(db, p2, now),
+    (e: unknown) => BillingError.hasCode(e, 'idempotency_conflict'),
+    'a different posting under a used key must not be answered with the old transaction',
+  );
 
   const bal = await balance(db, { tenantId: 't', subjectId: 's4', account: 'customer_balance', currency: 'USD' });
-  console.log('  balance =', bal.toString());
-  assert.equal(bal.toDecimalString(), '500.00', 'the corrected amount was silently discarded');
+  assert.equal(bal.toDecimalString(), '5.00', 'the refusal must not have written anything');
+
+  // The identical replay stays boring — the retry contract is intact.
+  const again = await post(db, accrualPosting({
+    tenantId: 't', subjectId: 's4', chargeId: 'charge-A4',
+    amount: Money.fromDecimalString('5.00', 'USD'),
+  }), now);
+  assert.equal(again.deduplicated, true);
+  assert.equal(again.entries.length, p1.legs.length);
 });
 
-test('A5: a late payment webhook cannot be posted — no partition, no default', async () => {
+test('A5: a late payment webhook posts into the default partition', async () => {
+  // What used to happen: billing.ledger_entries is PARTITION BY RANGE
+  // (posted_at), ensure_core_partitions only built a window around now, and
+  // there was no DEFAULT partition. A payment webhook carrying a four-month-old
+  // occurredAt had nowhere to land and Postgres refused the insert outright —
+  // "no partition of relation ... found for row". Late webhooks are normal: a
+  // provider retries for days, a reconciliation job backfills a quarter, a
+  // dead-letter queue gets replayed. Money was being rejected for want of a
+  // partition, which is the worst thing a billing system can do.
+  //
+  // 001_core now creates a DEFAULT partition on every range-partitioned table,
+  // so a row outside every declared month is stored rather than refused. This
+  // asserts the payment posts and can be read back — not merely that nothing
+  // threw, because a posting that vanished would also not throw.
   const old = new Date(now.getTime() - 120 * 24 * 3600e3); // 4 months ago
   const p = paymentPosting({
     tenantId: 't', subjectId: 's5', paymentId: 'pay-A5',
     amount: Money.fromDecimalString('100.00', 'USD'), occurredAt: old,
   });
-  await post(db, p, now); // expect: throws 23514 "no partition of relation"
+  const posted = await post(db, p, now);
+  console.log('  posted ->', posted.entries.map((e) => `${e.account}:${e.amount.toDecimalString()}`));
+
+  assert.equal(posted.deduplicated, false);
+  assert.equal(posted.entries.length, 2);
+
+  // Readable back through the normal query path, in the right account, for the
+  // right subject, at the timestamp the provider gave us.
+  const read = await entries(db, { tenantId: 't', subjectId: 's5' });
+  assert.deepEqual(
+    read.map((e) => `${e.account}:${e.amount.toDecimalString()}`).sort(),
+    ['cash:100.00', 'customer_balance:-100.00'],
+  );
+  assert.equal(read[0]!.postedAt.getTime(), old.getTime(), 'posted at the provider timestamp, not at arrival');
+
+  const cash = await balance(db, { tenantId: 't', subjectId: 's5', account: 'cash', currency: 'USD' });
+  assert.equal(cash.toDecimalString(), '100.00');
+
+  // And it really did go to the default partition, which is what makes this a
+  // test of the backstop rather than of a lucky month boundary.
+  const { rows } = await pool.query<{ n: string }>(
+    "SELECT count(*)::text AS n FROM billing.ledger_entries_default WHERE source_id = 'pay-A5'");
+  assert.equal(rows[0]!.n, '2', 'the late payment belongs in the DEFAULT partition');
 });
 
 test('A6: entries() silently truncates at 500 — a re-derived balance is short', async () => {
@@ -146,7 +228,7 @@ test('A7: the two layers agree on what a rate literal means', async () => {
     'the same rate literal must mean the same price in both layers');
 });
 
-test('A8: allocate() is documented as largest-remainder but is not', async () => {
+test('A8: allocate() gives the leftover to the largest remainder', async () => {
   const out = allocate(Money.fromMinor(10n, 'USD'), [1n, 1n, 97n]);
   console.log('  allocate 10 over weights [1,1,97] ->', out.map((m) => m.minor.toString()));
   // largest remainder: floors are 0,0,9; remainders .1,.1,9.7 -> the leftover

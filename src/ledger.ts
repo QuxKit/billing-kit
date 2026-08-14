@@ -125,6 +125,66 @@ async function entriesOfTransaction(tx: SqlExecutor, transactionId: string): Pro
 }
 
 /**
+ * Refuse a replay whose legs are not the legs that were posted.
+ *
+ * The idempotency key is (tenantId, sourceKind, sourceId) and says nothing
+ * about the amounts. So posting `charge-7` for $5.00 and then posting
+ * `charge-7` for $500.00 hits the claim, returns the $5.00 transaction with
+ * `deduplicated: true`, and writes nothing. The caller is told it succeeded.
+ * The $500.00 is gone — not rejected, not logged, not anywhere.
+ *
+ * This is worse here than in ingest, because a ledger is the record other
+ * things are reconciled against. The discrepancy has no trace to follow: there
+ * is no failed row, no error, and the transaction that exists looks perfectly
+ * well formed. It surfaces as a balance that disagrees with a provider's, and
+ * whoever chases it starts from a ledger that says nothing happened.
+ *
+ * Correcting a posted transaction is not a second `post` under the same key in
+ * any case. A ledger is append-only: a correction is a reversing entry and a
+ * new posting, both of which stay visible. Overwriting would destroy the audit
+ * trail that is the reason to keep a double-entry ledger at all. So the
+ * mismatch is refused, and `idempotency_conflict` is the code errors.ts already
+ * reserved for it.
+ *
+ * What is compared is the whole of what the legs mean: the account, the
+ * subject, the amount and its currency, in order. `memo` is not — it is prose
+ * for a human reading a statement, and a retry that improves the wording has
+ * not changed what was posted.
+ */
+function assertSameLegs(posting: LedgerPosting, existing: readonly LedgerEntry[]): void {
+  const key = `${posting.sourceKind}/${posting.sourceId}`;
+  const conflict = (detail: string): never => {
+    throw new BillingError({ code: 'idempotency_conflict', operation: 'post', key, detail });
+  };
+
+  if (existing.length !== posting.legs.length) {
+    conflict(`the posted transaction has ${existing.length} legs, this call sent ${posting.legs.length}`);
+  }
+
+  // By leg_no, which entriesOfTransaction already orders by and which the
+  // insert assigns from the array index — so position is meaningful and two
+  // legs cannot be matched to each other by accident.
+  for (const [i, leg] of posting.legs.entries()) {
+    const was = existing[i]!;
+    if (was.subjectId !== leg.subjectId) {
+      conflict(`leg ${i} was for subject ${was.subjectId}, this call sent ${leg.subjectId}`);
+    }
+    if (was.account !== leg.account) {
+      conflict(`leg ${i} was ${was.account}, this call sent ${leg.account}`);
+    }
+    if (was.amount.currency !== leg.amount.currency) {
+      conflict(`leg ${i} was in ${was.amount.currency}, this call sent ${leg.amount.currency}`);
+    }
+    if (was.amount.minor !== leg.amount.minor) {
+      conflict(
+        `leg ${i} (${leg.account}) was ${was.amount.toDecimalString()}, ` +
+          `this call sent ${leg.amount.toDecimalString()}`,
+      );
+    }
+  }
+}
+
+/**
  * Post one transaction. The only write path into the ledger.
  *
  * Idempotent on (tenantId, sourceKind, sourceId). Replaying the posting for a
@@ -167,9 +227,11 @@ export async function post(db: SqlExecutor, posting: LedgerPosting, now: Date): 
     }
 
     if (!row.inserted) {
+      const existing = await entriesOfTransaction(tx, row.id);
+      assertSameLegs(posting, existing);
       return {
         transactionId: row.id,
-        entries: await entriesOfTransaction(tx, row.id),
+        entries: existing,
         deduplicated: true,
       };
     }

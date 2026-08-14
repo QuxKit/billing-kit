@@ -107,14 +107,27 @@ describe('ingest', { skip: harness === null ? SKIP_REASON : false }, () => {
     assert.equal(second.eventId, first.eventId, 'the replay resolves to the original event');
   });
 
-  it('deduplicates on the caller key even when the payload differs', async () => {
-    // The external id is the contract. A retry that rebuilt its body slightly
-    // differently is still the same event, and billing it twice is the failure.
+  it('refuses the caller key when the payload differs, and writes nothing', async () => {
+    // This test used to assert the opposite — that the second call was reported
+    // as a duplicate and the first quantity kept — on the reasoning that "a
+    // retry that rebuilt its body slightly differently is still the same event,
+    // and billing it twice is the failure".
+    //
+    // Billing it twice IS the failure, and refusing does not bill it twice.
+    // That reasoning ruled out the wrong one of the three options. Silently
+    // keeping the first value also discards a correction, with no error and no
+    // trace, and adversarial case A2 is what that looks like: 10 billed where
+    // 1,000,000 was sent, reported as success. Refusing avoids both.
+    //
+    // What survives from the old test is the property it was really defending,
+    // asserted below: the refusal must not have written anything.
     const event = anEvent();
     await record(db, event, NOW);
-    const second = await record(db, { ...event, quantity: Quantity.fromBigInt(999n) }, NOW);
 
-    assert.equal(second.deduplicated, true);
+    await assert.rejects(
+      () => record(db, { ...event, quantity: Quantity.fromBigInt(999n) }, NOW),
+      (e: unknown) => BillingError.hasCode(e, 'idempotency_conflict'),
+    );
 
     const stored = await queryUsage(db, {
       tenantId: event.tenantId,
@@ -122,8 +135,58 @@ describe('ingest', { skip: harness === null ? SKIP_REASON : false }, () => {
       window: { start: new Date('2026-08-13T00:00:00Z'), end: new Date('2026-08-14T00:00:00Z') },
     });
     const mine = stored.filter((s) => s.externalId === event.externalId);
-    assert.equal(mine.length, 1);
-    assert.equal(mine[0]!.quantity.toDecimalString(), '100.000000000000');
+    assert.equal(mine.length, 1, 'nothing was double-billed');
+    assert.equal(mine[0]!.quantity.toDecimalString(), '100.000000000000', 'and nothing was overwritten');
+  });
+
+  it('does not mind metadata changing between a call and its retry', async () => {
+    // Metadata is annotation — a trace id, a request header — and it
+    // legitimately differs across a retry. Only what determines the bill is
+    // compared, or the refusal above would fire on ordinary traffic and teach
+    // callers to stop sending metadata.
+    const event = anEvent({ metadata: { traceId: 'first-attempt' } });
+    await record(db, event, NOW);
+    const retry = await record(db, { ...event, metadata: { traceId: 'second-attempt' } }, NOW);
+
+    assert.equal(retry.deduplicated, true);
+  });
+
+  it('reports the conflict through the batch path too', async () => {
+    // Otherwise the check is a property of which function you called, and the
+    // way around it is to send an array of one.
+    const event = anEvent();
+    await record(db, event, NOW);
+
+    await assert.rejects(
+      () => recordMany(db, [{ ...event, quantity: Quantity.fromBigInt(999n) }], NOW),
+      (e: unknown) => BillingError.hasCode(e, 'idempotency_conflict'),
+    );
+  });
+
+  it('lands nothing at all when one event in a batch conflicts', async () => {
+    // The conflict is checked before the insert, so the whole transaction
+    // aborts. A batch that half-applied and then reported a conflict would
+    // leave the caller with no safe move: retrying re-sends what succeeded, and
+    // not retrying drops what did not.
+    const seen = anEvent();
+    await record(db, seen, NOW);
+
+    const alsoNew = anEvent({ externalId: 'batch-partial-1' });
+    await assert.rejects(
+      () => recordMany(db, [alsoNew, { ...seen, quantity: Quantity.fromBigInt(999n) }], NOW),
+      (e: unknown) => BillingError.hasCode(e, 'idempotency_conflict'),
+    );
+
+    const stored = await queryUsage(db, {
+      tenantId: alsoNew.tenantId,
+      subjectId: alsoNew.subjectId,
+      window: { start: new Date('2026-08-13T00:00:00Z'), end: new Date('2026-08-14T00:00:00Z') },
+    });
+    assert.equal(
+      stored.some((s) => s.externalId === 'batch-partial-1'),
+      false,
+      'the good event in the batch must have rolled back with the bad one',
+    );
   });
 
   it('scopes the dedupe key by tenant and source', async () => {
@@ -168,7 +231,12 @@ describe('ingest', { skip: harness === null ? SKIP_REASON : false }, () => {
          FROM billing.usage_events WHERE external_id = $1`,
       [event.externalId],
     );
-    assert.equal(rows[0]?.partition, 'billing.usage_events_202607');
+    // `_2026m07`, not `_202607`. The `m` separator is what sql/011_partitions.sql
+    // has always produced for `charges`; the core tables used the bare form, so
+    // the schema had two conventions and billing.metering_health() measures
+    // partition runway by parsing these names. One convention, and this is the
+    // one that was already load-bearing.
+    assert.equal(rows[0]?.partition, 'billing.usage_events_2026m07');
   });
 
   it('refuses an UPDATE at the database, not only in the API', async () => {
@@ -203,15 +271,54 @@ describe('ingest', { skip: harness === null ? SKIP_REASON : false }, () => {
     // The claim and the insert are one transaction. If they were not, a crash
     // between them would claim a key with no event behind it, and no number of
     // retries could ever record that event again.
-    const event = anEvent({ occurredAt: new Date('2001-01-01T00:00:00Z') });
+    //
+    // This used to date the event to 2001 and rely on "no partition of relation"
+    // to make the insert fail. That hole is now closed — usage_events has a
+    // DEFAULT partition, so an out-of-range date lands rather than throwing, and
+    // the test stopped failing for the reason it was written.
+    //
+    // Failing the insert directly is what it always meant anyway. The property
+    // is that the claim rolls back when the insert fails, whatever the reason;
+    // borrowing a specific database error made the test hostage to that error
+    // continuing to exist, and it did not.
+    const event = anEvent();
 
-    await assert.rejects(() => record(db, event, NOW), /no partition of relation/);
+    const failingInsert = (inner: SqlExecutor): SqlExecutor => ({
+      query: (text, params) => {
+        if (text.includes('INSERT INTO billing.usage_events')) {
+          return Promise.reject(new Error('deliberate: the event insert failed'));
+        }
+        return inner.query(text, params);
+      },
+      transaction: (fn) => inner.transaction((tx) => fn(failingInsert(tx))),
+    });
+
+    await assert.rejects(() => record(failingInsert(db), event, NOW), /deliberate/);
 
     const keys = await db.query<{ count: string }>(
       'SELECT count(*)::text AS count FROM billing.usage_event_keys WHERE external_id = $1',
       [event.externalId],
     );
     assert.equal(keys[0]?.count, '0', 'the claim rolled back with the failed insert');
+  });
+
+  it('routes an event too old for any month partition into the default', async () => {
+    // The counterpart to what the test above used to rely on. A backdated event
+    // is not an error: a reconciliation job replaying a quarter is ordinary, and
+    // rejecting it loses usage that really happened. It lands in the DEFAULT
+    // partition, which is a safety net rather than a destination — see A5.
+    const event = anEvent({ occurredAt: new Date('2001-01-01T00:00:00Z') });
+
+    const result = await record(db, event, NOW);
+    assert.equal(result.deduplicated, false);
+
+    const where = await db.query<{ relname: string }>(
+      `SELECT c.relname FROM billing.usage_events e
+         JOIN pg_class c ON c.oid = e.tableoid
+        WHERE e.external_id = $1`,
+      [event.externalId],
+    );
+    assert.match(where[0]!.relname, /_default$/, 'a backdated event belongs in the default partition');
   });
 });
 

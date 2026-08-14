@@ -24,8 +24,21 @@ const PREFIX = process.env.BILLING_KIT_TEST_DB ?? 'billing_kit_test';
 
 const SQL_DIR = join(import.meta.dirname, '..', '..', '..', 'sql');
 
-/** In apply order. 002 must precede any charge; see its header. */
-const SCHEMA_FILES = ['010_metering.sql', '011_partitions.sql', '012_meter_batch.sql', '013_runs.sql'];
+/**
+ * In apply order.
+ *
+ * 001_core is here because the metering engine posts into ITS
+ * `billing.ledger_entries` — that table used to be declared a second time by
+ * 010_metering.sql in an incompatible shape, and 001_core's won. 010 refuses to
+ * apply without it. 011 must precede any charge; see its header.
+ */
+const SCHEMA_FILES = [
+  '001_core.sql',
+  '010_metering.sql',
+  '011_partitions.sql',
+  '012_meter_batch.sql',
+  '013_runs.sql',
+];
 
 export interface SeedOptions {
   items: number;
@@ -46,6 +59,16 @@ export interface Harness {
   /** Empty the data, keep the schema. */
   reset(): Promise<void>;
   seed(options: SeedOptions): Promise<void>;
+  /**
+   * Credit every subject that has a billable item, through the ledger.
+   *
+   * There is no other way to do it any more, and that is the point: the old
+   * `UPDATE billing.ledger_accounts SET balance_minor = …` wrote to a cache
+   * that no longer exists, so a test could put a subject in funding states the
+   * entries never justified. Funding now posts the same two legs a payment
+   * posts, and the guard reads the same sum production reads.
+   */
+  fund(minorUnits: string): Promise<void>;
   /** Run SQL and return raw text. Callers parse; nothing here guesses a type. */
   psql(sql: string): Promise<string>;
   /** One scalar, as text. */
@@ -53,6 +76,35 @@ export interface Harness {
   /** Same, as a number, for count(*)-shaped assertions. */
   count(sql: string): Promise<number>;
 }
+
+/**
+ * One `opening_balance` posting per subject, funding them by `minor` units.
+ *
+ * Signed the way sql/001_core.sql signs a ledger: positive is a debit, and
+ * `customer_balance` is a RECEIVABLE, so money the customer has put in makes it
+ * negative and the charges push it back up. `paymentPosting()` in
+ * src/ledger.ts posts exactly these two legs.
+ */
+const FUND_SQL = (minor: string): string => `
+  WITH s AS (
+    SELECT DISTINCT tenant_id, subject_id, currency FROM billing.billable_items
+  ),
+  tx AS (
+    INSERT INTO billing.ledger_transactions (id, tenant_id, source_kind, source_id, posted_at)
+    SELECT gen_random_uuid(), s.tenant_id, 'opening_balance', s.subject_id, now() FROM s
+    RETURNING id, tenant_id, source_id
+  )
+  INSERT INTO billing.ledger_entries
+    (id, transaction_id, tenant_id, subject_id, account, currency,
+     amount_minor, leg_no, source_kind, source_id, posted_at)
+  SELECT gen_random_uuid(), tx.id, tx.tenant_id, tx.source_id, l.account, s.currency,
+         l.amount_minor, l.leg_no, 'opening_balance', tx.source_id, now()
+    FROM tx
+    JOIN s ON s.tenant_id = tx.tenant_id AND s.subject_id = tx.source_id
+    CROSS JOIN LATERAL (VALUES
+      ('cash',             ${minor}::bigint, 0::smallint),
+      ('customer_balance', -${minor}::bigint, 1::smallint)
+    ) AS l(account, amount_minor, leg_no)`;
 
 export const createHarness = (name: string): Harness => {
   const database = `${PREFIX}_${name}`;
@@ -82,14 +134,21 @@ export const createHarness = (name: string): Harness => {
       for (const file of SCHEMA_FILES) {
         await exec('psql', ['-X', '-q', '-v', 'ON_ERROR_STOP=1', '-d', database, '-f', join(SQL_DIR, file)]);
       }
+      // Two calls because two files own partitions: 001_core's covers
+      // usage_events and ledger_entries, 011's covers charges and keeps
+      // ledger_entries ahead. Both delegate to the same
+      // billing.ensure_month_partition(), so calling both is idempotent.
+      await psql('SELECT billing.ensure_core_partitions(3)');
       await psql('SELECT billing.ensure_partitions(3, 2)');
     },
 
     reset: async (): Promise<void> => {
-      // TRUNCATE and not DELETE: these are partitioned tables, and the point is
-      // to start each test from a state where the only rows are its own.
+      // TRUNCATE and not DELETE: ledger_entries is append-only and every
+      // partition carries a trigger that says so, and these are partitioned
+      // tables anyway. The point is to start each test from a state where the
+      // only rows are its own.
       await psql(
-        `TRUNCATE billing.charges, billing.ledger_entries, billing.ledger_accounts,
+        `TRUNCATE billing.charges, billing.ledger_entries, billing.ledger_transactions,
                   billing.billable_items, billing.meter_runs CASCADE`,
       );
     },
@@ -99,10 +158,9 @@ export const createHarness = (name: string): Harness => {
      * fund them.
      *
      * `subjects` matters for the concurrency test specifically: when several
-     * items share a subject they share a ledger account, which is the only way
-     * two workers' account sets overlap — and overlapping account sets are the
-     * precondition for the deadlock that ordered locking exists to prevent. One
-     * subject per item would test nothing about that.
+     * items share a subject they share a balance, so two workers billing
+     * different items read and move the same account. One subject per item
+     * would test nothing about that.
      */
     seed: async (options: SeedOptions): Promise<void> => {
       const tenant = options.tenant ?? 't-test';
@@ -121,11 +179,12 @@ export const createHarness = (name: string): Harness => {
       );
 
       if (options.fundMinor !== undefined) {
-        await psql(
-          `UPDATE billing.ledger_accounts SET balance_minor = ${options.fundMinor}
-            WHERE kind = 'customer_balance'`,
-        );
+        await psql(FUND_SQL(options.fundMinor));
       }
+    },
+
+    fund: async (minorUnits: string): Promise<void> => {
+      await psql(FUND_SQL(minorUnits));
     },
 
     psql,

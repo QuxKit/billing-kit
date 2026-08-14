@@ -56,26 +56,24 @@ root, so an application using one does not compile the others. Import
 `billing-kit/metering` for the batch driver and `billing-kit/providers` for the
 adapter interface and its two implementations.
 
-The ledger and money tests run against a real Postgres, and `pnpm run test:unit`
-is green.
+The ledger and money tests run against a real Postgres. `pnpm run test:unit` is
+green, and so is `pnpm run test:adversarial` — the suite of probes that used to
+name four open defects. They are kept, and what each one probes is worth reading
+before building anything that depends on a replay being safe:
 
-`pnpm test` is **not**, and that is deliberate. It also runs
-`test/adversarial/`, four of whose probes fail because they name real defects
-that are still open — read them before building anything that depends on a
-replay being safe:
+| | What it caught | Where the fix lives |
+|---|---|---|
+| **A2** | A replay carrying a *different* quantity was reported as a duplicate: 10 billed where 1,000,000 was sent, reported as success | `record()` refuses with `idempotency_conflict` |
+| **A4** | A ledger replay with different legs returned the old transaction and discarded the correction, with no error and nothing to follow | `post()` refuses the same way |
+| **A5** | A late payment webhook could not be posted at all — no partition, no default | partition routing, see below |
+| **A8** | `allocate()` was documented as largest-remainder and handed leftovers out from index 0, so a 1% share could take a penny from a 97% share | largest remainder, ties by index |
 
-| | What is wrong today |
-|---|---|
-| **A2** | A replay carrying a *different* quantity is reported as a duplicate |
-| **A4** | A ledger replay with different legs returns the old transaction; the corrected amount is silently discarded |
-| **A5** | A late payment webhook cannot be posted — no partition, no default |
-| **A8** | `allocate()` is documented as largest-remainder and is not |
-
-A2 and A4 are the ones that matter for money: a correction that vanishes
-without an error is a revenue discrepancy nobody can trace back. They stay red
-until the semantics are settled, because a red test that names a defect is
-worth more than a green suite that hides one. `prepublishOnly` gates on
-`test:unit` so that choice does not double as a permanent publish block.
+A2 and A4 were the ones that mattered for money, and the fix for both is to
+**refuse rather than choose**. Keeping the stored value discards a correction;
+overwriting it lets a stale retry clobber one. Nothing inside the call can tell
+those apart, so the caller is told. `idempotency_conflict` was already in the
+error union, described and never raised — the contract had been written and not
+implemented.
 
 ## What it does itself, and will not delegate
 
@@ -193,6 +191,18 @@ await billing.transaction(async (tx) => {
 A duplicate is success. A retrying client treats 409 as fatal and either drops
 the event or pages someone; the point of an idempotent endpoint is that the
 retry is boring.
+
+**A retry is the same request.** The same `externalId` carrying a *different*
+quantity or `occurredAt` is refused, with `idempotency_conflict` — the same for
+`post()` when the legs differ. It is the one place the rule above is inverted,
+and for the reason the rule exists: a different request under a used key is not
+a retry, it is a bug in the caller, and answering it "already recorded" reports
+success for something that never happened. Keeping the stored value discards a
+correction; overwriting it lets a stale retry clobber one. Neither is
+recoverable and neither leaves a trace, so the caller is told instead.
+
+`metadata` is not compared — a trace id legitimately differs across a retry.
+Only what determines the bill is.
 
 `occurredAt` is the caller's and is the partition key. `receivedAt` is the
 database's. Both are kept, because the gap between them is how lateness is
@@ -343,12 +353,18 @@ Three things worth knowing:
   installs no driver; the CLI needs one to open a socket, loads it dynamically,
   and tells you what to install if it is absent.
 
-Known, and not the CLI's to fix: `sql/001_core.sql` and `sql/010_metering.sql`
-declare `billing.ledger_entries` in two incompatible shapes and `010` raises
-rather than let the second definition be silently ignored (both files say so in
-their headers). So `migrate` over the shipped five stops after `001_core.sql`,
-prints Postgres's explanation, and records nothing for `010`. The metering group
-`010`–`013` applies cleanly on its own with `--migrations`.
+All five shipped files apply in one run. `001_core.sql` and `010_metering.sql`
+used to declare `billing.ledger_entries` in two incompatible shapes, and `010`
+raised rather than let the second definition be silently ignored, so `migrate`
+over the shipped set halted after the first file. `001_core`'s shape won — it is
+the one `LedgerEntry` in `src/types.ts` describes — and the metering engine was
+migrated onto it.
+
+`001_core.sql` also calls `billing.ensure_core_partitions()` at the end, so the
+schema can take a row the moment it exists. Without that the file defined the
+function and never ran it, and a freshly migrated database had no partitions at
+all: every insert failed with *no partition of relation* until somebody knew to
+call it by hand.
 
 ## Design rules
 
@@ -369,8 +385,8 @@ prints Postgres's explanation, and records nothing for `010`. The metering group
 ```
 pnpm install
 pnpm typecheck
-pnpm run test:unit         # the shipped suite — green
-pnpm run test:adversarial  # the open defects — red, on purpose
+pnpm run test:unit         # the shipped suite
+pnpm run test:adversarial  # the probes that found A2/A4/A5/A8 — keep them green
 pnpm build                 # dist/, ESM + CJS + declarations
 pnpm run test:pack         # packs, installs the tarball, drives it with plain node
 ```

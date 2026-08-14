@@ -362,6 +362,47 @@ describe('allocate', () => {
     assert.equal(Money.sum(parts, 'USD').minor, -100n);
   });
 
+  it('gives the leftover to the largest remainder, not to whoever is first', () => {
+    // The defect this pins (A8). Flooring gives 0, 0, 9 and one penny over.
+    // Handing leftovers out from index 0 awarded it to a 1% share and withheld
+    // it from the 97% share — a result that summed back correctly, so every
+    // test that checked only the total passed.
+    const parts = allocate(Money.fromMinor(10n, 'USD'), [1n, 1n, 97n]);
+    assert.deepEqual(parts.map((p) => p.minor), [0n, 0n, 10n]);
+    assert.equal(Money.sum(parts, 'USD').minor, 10n);
+  });
+
+  it('does not depend on the order of the weights', () => {
+    // The property that makes the defect matter rather than merely offend. A
+    // weights array is built by a caller's query, and its order is an
+    // implementation detail of that query — a split that changes when the ORDER
+    // BY changes is a split nobody can reconcile.
+    const forwards = allocate(Money.fromMinor(10n, 'USD'), [1n, 1n, 97n]);
+    const backwards = allocate(Money.fromMinor(10n, 'USD'), [97n, 1n, 1n]);
+    assert.deepEqual(
+      forwards.map((p) => p.minor).slice().sort(),
+      backwards.map((p) => p.minor).slice().sort(),
+    );
+    assert.equal(backwards[0]!.minor, 10n, 'the 97 share keeps the penny wherever it sits');
+  });
+
+  it('breaks a tie by index, so two runs cannot disagree', () => {
+    // Equal remainders have no "largest". Something has to decide, and it has
+    // to be the arguments rather than the sort's internal order.
+    for (let i = 0; i < 5; i++) {
+      const parts = allocate(Money.fromMinor(100n, 'USD'), [1n, 1n, 1n]);
+      assert.deepEqual(parts.map((p) => p.minor), [34n, 33n, 33n]);
+    }
+  });
+
+  it('splits a refund by largest remainder too', () => {
+    // Sign is handled by taking the magnitude, so the negative case must land
+    // on the same shares with the sign put back — not on a mirror of them.
+    const parts = allocate(Money.fromMinor(-10n, 'USD'), [1n, 1n, 97n]);
+    assert.deepEqual(parts.map((p) => p.minor), [0n, 0n, -10n]);
+    assert.equal(Money.sum(parts, 'USD').minor, -10n);
+  });
+
   it('refuses weights that cannot allocate', () => {
     assert.throws(
       () => allocate(Money.fromMinor(100n, 'USD'), []),

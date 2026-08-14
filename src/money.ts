@@ -598,6 +598,20 @@ export function price(quantity: Quantity, rate: Rate, currency: string): PricedA
  * units out one at a time. Dividing 100 by 3 and rounding each share gives
  * 33 + 33 + 33 = 99, and the missing penny is the kind of discrepancy that
  * surfaces as a failed reconciliation months later.
+ *
+ * "Largest remainder" is the whole of the method, and it is the part this
+ * function used to skip. Flooring and then handing the leftovers out from
+ * index 0 sums back correctly — so every test that checked the total passed —
+ * while giving the pennies to whoever happens to be first in the array. On
+ * weights [1, 1, 97] that awarded a penny to a 1% share and withheld one from
+ * the 97% share.
+ *
+ * That is not a rounding preference. Allocation is how a payment is split
+ * across invoices, a refund across lines, a platform fee across sellers: the
+ * order of a weights array is an implementation detail of the caller's query,
+ * and money must not depend on it. Ties are broken by index, so the result is
+ * a function of the arguments and nothing else — two runs, or a run on another
+ * machine, cannot disagree.
  */
 export function allocate(amount: Money, weights: readonly bigint[]): Money[] {
   if (weights.length === 0) {
@@ -615,16 +629,36 @@ export function allocate(amount: Money, weights: readonly bigint[]): Money[] {
   const negative = amount.minor < 0n;
   const magnitude = negative ? -amount.minor : amount.minor;
 
+  // The remainder is kept as the exact numerator `magnitude * w - share * total`
+  // rather than as a fraction. Comparing remainders over a common denominator is
+  // comparing the numerators, and doing it in bigint means no share is ever
+  // decided by a floating-point comparison.
   const shares: bigint[] = [];
+  const remainders: bigint[] = [];
   let allocated = 0n;
   for (const w of weights) {
-    const share = (magnitude * w) / total;
+    const numerator = magnitude * w;
+    const share = numerator / total;
     shares.push(share);
+    remainders.push(numerator - share * total);
     allocated += share;
   }
 
+  // Largest remainder first; equal remainders go to the earlier index. The
+  // tie-break is what makes this deterministic — without it, two equal shares
+  // would be separated by whatever order the sort happened to produce.
+  const order = shares.map((_s, i) => i).sort((a, b) => {
+    const ra = remainders[a]!;
+    const rb = remainders[b]!;
+    if (ra !== rb) return ra > rb ? -1 : 1;
+    return a - b;
+  });
+
+  // At most one unit each: the leftover is strictly less than the number of
+  // shares, since every remainder discarded by flooring is less than `total`.
   let leftover = magnitude - allocated;
-  for (let i = 0; leftover > 0n; i = (i + 1) % shares.length) {
+  for (const i of order) {
+    if (leftover === 0n) break;
     shares[i] = shares[i]! + 1n;
     leftover -= 1n;
   }

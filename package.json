@@ -81,7 +81,7 @@
     "test:unit": "tsx --test --test-concurrency=1 test/*.test.ts",
     "test:adversarial": "tsx --test --test-concurrency=1 test/adversarial/*.test.ts",
     "test:pack": "tsx --test scripts/verify-pack.ts",
-    "prepublishOnly": "pnpm run build && pnpm run test:unit && pnpm run typecheck && pnpm run test:pack"
+    "prepublishOnly": "pnpm run build && pnpm test && pnpm run typecheck && pnpm run test:pack"
   },
   "publishConfig": {
     "access": "public"

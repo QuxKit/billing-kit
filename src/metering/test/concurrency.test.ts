@@ -159,23 +159,34 @@ describe('metering under concurrency', () => {
          GROUP BY source_id HAVING count(*) <> 2) x`);
     assert.equal(legsPerCharge, 0, 'each charge posts exactly two legs');
 
-    // The cached balance must equal the entries that moved it. This is the
-    // check that would catch a lost update from the concurrent balance UPDATE.
-    const balanceDrift = await num(`
-      SELECT count(*)::text
-        FROM billing.ledger_accounts a
-        LEFT JOIN (SELECT account_id, sum(amount_minor) AS total
-                     FROM billing.ledger_entries GROUP BY account_id) e ON e.account_id = a.id
-       WHERE a.kind = 'revenue_accrued'
-         AND a.balance_minor <> coalesce(e.total, 0)`);
-    assert.equal(balanceDrift, 0, 'cached account balance must equal the sum of its entries');
+    // One ledger transaction per charge, and its unique
+    // (tenant_id, source_kind, source_id) is what makes a replayed posting
+    // impossible rather than unlikely. Unlike the old per-partition unique
+    // index on the entries, this constraint holds across the whole ledger,
+    // because ledger_transactions is not partitioned.
+    const transactionsPerCharge = await num(`
+      SELECT count(*)::text FROM (
+        SELECT source_id FROM billing.ledger_transactions WHERE source_kind = 'charge'
+         GROUP BY source_id HAVING count(*) <> 1) x`);
+    assert.equal(transactionsPerCharge, 0, 'each charge posts exactly one ledger transaction');
 
-    // Revenue accrued must equal minutes billed, since the rate is exactly 1.0
+    // Accrued revenue must equal minutes billed, since the rate is exactly 1.0
     // minor units per minute and the rounding of a whole number is itself.
+    //
+    // NEGATED, and the sign is the point rather than a nuisance. This used to
+    // read a `balance_minor` column cached on billing.ledger_accounts, which no
+    // longer exists — it was maintained by meter_batch alone, so any posting
+    // made through src/ledger.ts left it stale. The number now comes from the
+    // entries themselves, which is where `balance()` gets it, and under
+    // sql/001_core.sql's convention accruing revenue CREDITS the revenue
+    // account: positive is a debit, so a credit is negative. The old
+    // expectation was not merely inconvenient, it was reading a different
+    // number from a different table with a different sign.
     const revenue = await scalar(
-      `SELECT coalesce(sum(balance_minor), 0)::text FROM billing.ledger_accounts WHERE kind = 'revenue_accrued'`,
+      `SELECT coalesce(sum(amount_minor), 0)::text
+         FROM billing.ledger_entries WHERE account = 'revenue_accrued'`,
     );
-    const minutes = await scalar(`SELECT coalesce(sum(quantity), 0)::bigint::text FROM billing.charges`);
+    const minutes = await scalar(`SELECT coalesce(-sum(quantity), 0)::bigint::text FROM billing.charges`);
     assert.equal(revenue, minutes, 'accrued revenue must equal billed minutes at a rate of 1');
 
     const suspended = await num(`SELECT count(*)::text FROM billing.billable_items WHERE status <> 'active'`);

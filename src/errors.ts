@@ -20,8 +20,13 @@ export type BillingFailure =
   // --- ingest --------------------------------------------------------------
   | { code: 'invalid_event'; field: string; reason: string }
   /** Same idempotency key, different request. A bug in the caller, surfaced
-   *  rather than answered with a stale response for a request never made. */
-  | { code: 'idempotency_conflict'; operation: string; key: string }
+   *  rather than answered with a stale response for a request never made.
+   *
+   *  `detail` names what actually differs — the stored value and the one this
+   *  call sent. Without it the caller knows a key was reused and has to go and
+   *  query for the row to find out how, which is the work this error exists to
+   *  save them. Optional because the failure is meaningful without it. */
+  | { code: 'idempotency_conflict'; operation: string; key: string; detail?: string }
   /** The dedupe claim neither inserted nor resolved. See events.ts. */
   | { code: 'dedupe_unresolved'; source: string; externalId: string }
 
@@ -55,7 +60,10 @@ function describe(failure: BillingFailure): string {
     case 'invalid_event':
       return `usage event field ${failure.field} is invalid: ${failure.reason}`;
     case 'idempotency_conflict':
-      return `idempotency key ${failure.key} for ${failure.operation} was used for a different request`;
+      return (
+        `idempotency key ${failure.key} for ${failure.operation} was used for a different request` +
+        (failure.detail === undefined ? '' : ` (${failure.detail})`)
+      );
     case 'dedupe_unresolved':
       return `dedupe claim for ${failure.source}/${failure.externalId} neither inserted nor resolved`;
     case 'window_sealed':

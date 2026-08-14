@@ -87,14 +87,14 @@ CREATE OR REPLACE FUNCTION billing.meter_batch(
 )
 LANGUAGE plpgsql AS $$
 DECLARE
-  v_items     integer;
-  v_minutes   bigint;
-  v_amounts   jsonb;
-  v_accounts  integer;
-  v_debits    integer;
-  v_credits   integer;
-  v_ids       uuid[];
-  v_suspended integer := 0;
+  v_items        integer;
+  v_minutes      bigint;
+  v_amounts      jsonb;
+  v_accounts     integer;
+  v_transactions integer;
+  v_legs         integer;
+  v_ids          uuid[];
+  v_suspended    integer := 0;
 BEGIN
   IF p_batch IS NULL OR p_batch < 1 THEN
     RAISE EXCEPTION 'meter_batch: p_batch must be at least 1, got %', p_batch
@@ -283,81 +283,55 @@ BEGIN
       FROM claimed c
     RETURNING id, tenant_id, subject_id, item_id, currency, amount_minor, quantity
   ),
-  -- Two legs, signed, summing to zero. `leg` is a discriminator for the
-  -- idempotency key, not the accounting sign — the sign is in amount_minor.
-  --
-  -- customer_balance is signed from the subject's point of view: positive means
-  -- funded, so a charge subtracts. That is the convention the balance guard
-  -- below reads, and it is stated here rather than inferred from the guard.
-  debit AS (
-    INSERT INTO billing.ledger_entries (
-      transaction_id, tenant_id, account_id, amount_minor, currency,
-      source_kind, source_id, leg, memo)
-    SELECT ch.id, ch.tenant_id, a.id, -ch.amount_minor, ch.currency,
-           'charge', ch.id, 'debit', 'elapsed-time metering'
-      FROM charged ch
-      JOIN billing.ledger_accounts a
-        ON  a.tenant_id  = ch.tenant_id
-        AND a.subject_id = ch.subject_id
-        AND a.kind       = 'customer_balance'
-        AND a.currency   = ch.currency
-    RETURNING account_id, amount_minor
-  ),
-  credit AS (
-    INSERT INTO billing.ledger_entries (
-      transaction_id, tenant_id, account_id, amount_minor, currency,
-      source_kind, source_id, leg, memo)
-    SELECT ch.id, ch.tenant_id, a.id, ch.amount_minor, ch.currency,
-           'charge', ch.id, 'credit', 'elapsed-time metering'
-      FROM charged ch
-      JOIN billing.ledger_accounts a
-        ON  a.tenant_id  = ch.tenant_id
-        AND a.subject_id = ch.subject_id
-        AND a.kind       = 'revenue_accrued'
-        AND a.currency   = ch.currency
-    RETURNING account_id, amount_minor
-  ),
-  movements AS (
-    SELECT m.account_id, sum(m.amount_minor) AS delta
-      FROM (SELECT account_id, amount_minor FROM debit
-            UNION ALL
-            SELECT account_id, amount_minor FROM credit) m
-     GROUP BY m.account_id
-  ),
-  locks AS MATERIALIZED (
-    -- Take every account lock this batch needs, in id order, before touching
-    -- any of them.
+  posted AS (
+    -- The transaction row, one per charge, in billing.ledger_transactions
+    -- (sql/001_core.sql). This is where posting idempotency actually lives:
+    -- UNIQUE (tenant_id, source_kind, source_id) on an UNPARTITIONED table, so
+    -- it holds across the whole ledger rather than within one partition.
     --
-    -- Without this, `balances` locks accounts in whatever order its plan
-    -- produces. Two workers hold disjoint ITEM sets — SKIP LOCKED guarantees
-    -- that — but two items in different batches routinely belong to the same
-    -- subject, so the ACCOUNT sets overlap. Worker A takes X then Y while
-    -- worker B takes Y then X and one of them is rolled back by the deadlock
-    -- detector, discarding a batch that had already done all its work.
+    -- Deliberately no ON CONFLICT, for the same reason `charged` has none: a
+    -- conflict here means charge id X has already been posted, and a charge id
+    -- is generated once by the INSERT above. It cannot collide unless an
+    -- invariant is already broken, and the right answer to a broken invariant
+    -- is to abort rather than to write a charge with no ledger legs.
     --
-    -- MATERIALIZED is required, not stylistic. Inlined, this becomes a semi-
-    -- join evaluated as `balances` scans, and the ordering it exists to impose
-    -- disappears into the plan. Materialised, it is a tuplestore that must be
-    -- filled before `balances` can read it, so the locks are taken in sorted
-    -- order and the dependency is visible to the planner.
-    SELECT a.id
-      FROM billing.ledger_accounts a
-     WHERE a.id IN (SELECT m.account_id FROM movements m)
-     ORDER BY a.id
-     FOR UPDATE
+    -- `id` is the charge id, so `transaction_id` on the entries below names the
+    -- charge that caused them without a join through anything else.
+    INSERT INTO billing.ledger_transactions (id, tenant_id, source_kind, source_id, posted_at)
+    SELECT ch.id, ch.tenant_id, 'charge', ch.id::text, now()
+      FROM charged ch
+    RETURNING id
   ),
-  balances AS (
-    -- Maintained in the same transaction as the entries that move it, so the
-    -- balance guard below reads a number that includes this batch. A cache
-    -- refreshed by a separate job would let an item bill one more interval
-    -- after the money ran out, every time.
-    UPDATE billing.ledger_accounts a
-       SET balance_minor = a.balance_minor + m.delta,
-           updated_at    = now()
-      FROM movements m
-     WHERE a.id = m.account_id
-       AND a.id IN (SELECT l.id FROM locks l)
-    RETURNING a.id
+  legs AS (
+    -- Two legs, signed, summing to zero, in 001_core's columns and 001_core's
+    -- sign convention: positive is a debit, negative is a credit.
+    --
+    -- The signs are the mirror of what this file used to write, and the flip is
+    -- the substance of migrating onto the canonical shape rather than a detail
+    -- of it. This engine used to treat customer_balance as a prepaid wallet
+    -- seen from the subject — positive means funded, a charge subtracts.
+    -- src/ledger.ts's accrualPosting() treats it as a receivable seen from us —
+    -- a charge ADDS to what the customer owes, and a payment subtracts (see
+    -- paymentPosting()). Both are coherent; they are not both possible in one
+    -- table. A charge posted by this function and a charge posted by
+    -- `post(accrualPosting(...))` would otherwise move the same account in
+    -- opposite directions, and no balance in the system would mean anything.
+    --
+    -- leg_no 0 and 1 in that order, matching accrualPosting()'s leg order, so
+    -- an entry written here is indistinguishable from one written by the
+    -- library. `legNo` is the ordinal in the posting, not an accounting sign;
+    -- the sign is in amount_minor.
+    INSERT INTO billing.ledger_entries (
+      id, transaction_id, tenant_id, subject_id, account, currency,
+      amount_minor, leg_no, source_kind, source_id, posted_at, memo)
+    SELECT gen_random_uuid(), ch.id, ch.tenant_id, ch.subject_id, l.account, ch.currency,
+           l.amount_minor, l.leg_no, 'charge', ch.id::text, now(), 'elapsed-time metering'
+      FROM charged ch
+      CROSS JOIN LATERAL (VALUES
+        ('customer_balance',  ch.amount_minor, 0::smallint),
+        ('revenue_accrued',  -ch.amount_minor, 1::smallint)
+      ) AS l(account, amount_minor, leg_no)
+    RETURNING tenant_id, subject_id, account, currency
   )
   SELECT
     (SELECT count(*) FROM charged)::integer,
@@ -365,50 +339,99 @@ BEGIN
     (SELECT coalesce(jsonb_object_agg(g.currency, g.total::text), '{}'::jsonb)
        FROM (SELECT c.currency, sum(c.amount_minor) AS total
                FROM charged c GROUP BY c.currency) g),
-    (SELECT count(*) FROM balances)::integer,
-    (SELECT count(*) FROM debit)::integer,
-    (SELECT count(*) FROM credit)::integer,
+    -- Distinct accounts this batch moved. The same number the old cached-balance
+    -- UPDATE reported, computed from the legs instead of from the rows it wrote
+    -- to a cache: two per (subject, currency) that was billed.
+    (SELECT count(*) FROM (
+       SELECT DISTINCT tenant_id, subject_id, account, currency FROM legs) a)::integer,
+    (SELECT count(*) FROM posted)::integer,
+    (SELECT count(*) FROM legs)::integer,
     (SELECT coalesce(array_agg(c.item_id), ARRAY[]::uuid[]) FROM charged c)
-  INTO v_items, v_minutes, v_amounts, v_accounts, v_debits, v_credits, v_ids;
+  INTO v_items, v_minutes, v_amounts, v_accounts, v_transactions, v_legs, v_ids;
 
-  -- The join in `debit`/`credit` is an inner join, so a subject with no ledger
-  -- account would lose its legs and keep its charge: billed, grid advanced, no
-  -- ledger record, nothing raised. The trigger in 001 is what makes that
-  -- impossible; this is what makes it detected. Asserting a fact costs one
-  -- comparison and removes a whole class of "the ledger doesn't reconcile and
-  -- nobody knows since when".
-  IF v_debits <> v_items OR v_credits <> v_items THEN
+  -- Every charge got one transaction row and two legs.
+  --
+  -- Cheaper than it looks and worth keeping even though the LATERAL above makes
+  -- a missing leg hard to imagine: `posted` and `legs` are data-modifying CTEs
+  -- whose results nothing else consumes, and counting them here is what makes
+  -- their execution a fact a reader can check rather than a promise. The legs
+  -- summing to zero is enforced separately and at COMMIT, by 001_core's
+  -- deferred assert_transaction_balanced() constraint trigger.
+  IF v_transactions <> v_items OR v_legs <> 2 * v_items THEN
     RAISE EXCEPTION
-      'meter_batch: % charges produced % debit and % credit legs; a ledger account is missing for a billed subject',
-      v_items, v_debits, v_credits
+      'meter_batch: % charges produced % ledger transactions and % legs; expected % and %',
+      v_items, v_transactions, v_legs, v_items, 2 * v_items
       USING ERRCODE = 'data_exception';
   END IF;
 
   -- The balance guard.
   --
   -- Same transaction as the charge, so an item cannot be billed again after the
-  -- balance went negative. The trade is stated rather than hidden: an item may
-  -- overdraft by at most one interval, because the alternative is refusing to
-  -- bill for time the customer has already consumed, and that is a worse
-  -- answer to give an auditor than a bounded overdraft.
+  -- customer went past what they have paid for. The trade is stated rather than
+  -- hidden: an item may overdraft by at most one interval, because the
+  -- alternative is refusing to bill for time the customer has already consumed,
+  -- and that is a worse answer to give an auditor than a bounded overdraft.
+  --
+  -- `> 0` and not `< 0`, because customer_balance is a receivable under
+  -- 001_core's convention: charges add to it, payments subtract. A positive
+  -- balance is a customer who has consumed more than they have funded. See the
+  -- sign note on `legs` above.
+  --
+  -- DERIVED, not read from a cache, and this is the one place the cost of that
+  -- decision lands. sql/010_metering.sql's `ledger_accounts` used to carry a
+  -- balance_minor column that this guard read in a single indexed lookup; it is
+  -- gone because it was maintained by this function alone, so every payment
+  -- posted through src/ledger.ts desynchronised it silently. The number below
+  -- is the same one `balance()` returns, by construction.
+  --
+  -- What it costs. Verified on PostgreSQL 17: this predicate is served by
+  -- ledger_entries_balance_idx as an **Index Only Scan with Heap Fetches: 0**,
+  -- which is what INCLUDE (amount_minor) on that index is for — the aggregate
+  -- reads the index and never visits the heap. Confirmed from EXPLAIN (ANALYZE,
+  -- BUFFERS) against a migrated database.
+  --
+  -- No millisecond figures are quoted here on purpose. An earlier revision of
+  -- this comment carried a table of them and they could not be reproduced, which
+  -- makes them worse than absent: a number in a comment is read as measured, and
+  -- the next person sizes a batch against it. If you need them, measure on your
+  -- own hardware and data — and note that a synthetic fixture is easy to get
+  -- wrong here, because assert_transaction_balanced() is a DEFERRED FOR EACH ROW
+  -- constraint trigger that sums the whole transaction, so loading a fixture as
+  -- one transaction with N legs costs O(N^2) at commit and measures the fixture
+  -- rather than this guard. Real postings have two or three legs.
+  --
+  -- The shape of the cost is the part that matters and it does not need a
+  -- benchmark: this sums a subject's entry history, so the guard costs the total
+  -- history of the subjects in the batch, NOT the size of the batch. It is
+  -- linear and unbounded in that history, and it is the same work `balance()` in
+  -- src/ledger.ts does on every call.
+  --
+  -- When that stops being acceptable, the answer is a rollup table maintained by
+  -- a trigger on ledger_entries itself — which cannot drift, because
+  -- ledger_entries is append-only and the trigger sits on its only write path —
+  -- and NOT a cache that one caller remembers to update. That was the previous
+  -- design and it is why ledger_accounts.balance_minor is gone: it was
+  -- maintained here and nowhere else, so every payment posted through
+  -- src/ledger.ts desynchronised it silently. A decision for whoever owns the
+  -- ledger; it does not change the meaning of this guard, only how the number is
+  -- fetched.
   --
   -- Restricted to `v_ids` — the items this transaction already holds locks on.
   -- Suspending every item belonging to an underwater subject would be more
   -- thorough, but it would take locks on rows a sibling worker may hold, in an
-  -- order nothing controls, which is the deadlock `locks` above just went to
-  -- some trouble to avoid. The rest of the subject's items suspend on their own
-  -- next batch, at most one interval later.
+  -- order nothing controls. The rest of the subject's items suspend on their
+  -- own next batch, at most one interval later.
   UPDATE billing.billable_items r
      SET status       = 'suspended',
          suspended_at = now()
-    FROM billing.ledger_accounts a
    WHERE r.id = ANY (v_ids)
-     AND r.status      = 'active'
-     AND a.tenant_id   = r.tenant_id
-     AND a.subject_id  = r.subject_id
-     AND a.kind        = 'customer_balance'
-     AND a.currency    = r.currency
-     AND a.balance_minor < 0;
+     AND r.status = 'active'
+     AND (SELECT coalesce(sum(e.amount_minor), 0)
+            FROM billing.ledger_entries e
+           WHERE e.tenant_id  = r.tenant_id
+             AND e.subject_id = r.subject_id
+             AND e.account    = 'customer_balance'
+             AND e.currency   = r.currency) > 0;
 
   GET DIAGNOSTICS v_suspended = ROW_COUNT;
 

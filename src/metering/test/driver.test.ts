@@ -70,15 +70,38 @@ describe('metering driver', () => {
     // the run record were written from inside meter_batch, this test would find
     // no row.
     await reset();
-    await seed({ items: 1, subjects: 1, minutesStale: 5, ratePerMinute: '1.0', fundMinor: '1000' });
+    await seed({ items: 1, subjects: 1, minutesStale: 5, ratePerMinute: '1.0' });
 
-    // Break an invariant the engine asserts on: remove the revenue account, so
-    // the charge cannot post its credit leg and meter_batch raises.
-    await psql(`DELETE FROM billing.ledger_accounts WHERE kind = 'revenue_accrued'`);
+    // Break an invariant the engine asserts on.
+    //
+    // This used to delete the item's `revenue_accrued` row from
+    // billing.ledger_accounts, so meter_batch's inner join dropped a leg and it
+    // raised "a ledger account is missing". That table is gone: 001_core's
+    // ledger names accounts inline on the entry, so there is no row to delete
+    // and no join to break — the failure mode itself no longer exists, which is
+    // why the expectation changed rather than the assertion being relaxed.
+    //
+    // What is used instead is the invariant the file is loudest about: plant a
+    // charge on exactly the (item_id, window_start) the next batch will compute,
+    // so `charges_item_window` rejects it. 012_meter_batch.sql refuses to pair
+    // that index with ON CONFLICT DO NOTHING precisely so this aborts.
+    //
+    // Matched on `item_id_window_start` rather than on `charges_item_window`:
+    // the violation is reported against the LEAF index, which Postgres names
+    // after the partition (charges_2026m08_item_id_window_start_idx), so the
+    // partition name is in the string and the parent's is not.
+    await psql(
+      `INSERT INTO billing.charges
+         (tenant_id, subject_id, item_id, metric, window_start, window_end,
+          quantity, rate, amount_minor, amount_exact, currency)
+       SELECT tenant_id, subject_id, id, metric, last_billed_at,
+              last_billed_at + interval '1 minute', 1, rate_per_minute, 1, 1, currency
+         FROM billing.billable_items`,
+    );
 
     await assert.rejects(
       () => withDb((db) => drain({ db, batch: 10, runner: 'test-fail' })),
-      /ledger account is missing/,
+      /item_id_window_start/,
       'a broken invariant must reach the caller, not be swallowed',
     );
 
@@ -86,12 +109,20 @@ describe('metering driver', () => {
       `SELECT status || '|' || coalesce(error, '') FROM billing.meter_runs WHERE runner = 'test-fail'`,
     );
     assert.match(row, /^failed\|/, 'the failed run must have left a record');
-    assert.match(row, /ledger account is missing/, 'and the record must say why');
+    assert.match(row, /item_id_window_start/, 'and the record must say why');
 
-    // The transaction that failed rolled back completely: no charge, no grid
-    // movement, no half-written ledger.
-    assert.equal(await scalar('SELECT count(*)::text FROM billing.charges'), '0');
+    // The transaction that failed rolled back completely: the planted charge is
+    // all that is there, no grid movement, no half-written ledger.
+    assert.equal(await scalar('SELECT count(*)::text FROM billing.charges'), '1');
     assert.equal(await scalar('SELECT count(*)::text FROM billing.ledger_entries'), '0');
+    assert.equal(
+      await scalar(
+        `SELECT (last_billed_at = (SELECT window_start FROM billing.charges))::text
+           FROM billing.billable_items`,
+      ),
+      'true',
+      'the grid must not have advanced',
+    );
   });
 
   it('holds a lease, so a second drain skips instead of overlapping', async () => {
@@ -184,12 +215,25 @@ describe('metering driver', () => {
     assert.equal(report.itemsSuspended, 1);
 
     // The trade, asserted rather than described: the customer consumed ten
-    // minutes and is charged for ten minutes, taking the balance to -750. The
-    // overdraft is bounded by one interval and then the item stops.
+    // minutes and is charged for ten minutes, so 250 funded against 1,000
+    // charged leaves 750 owed. The overdraft is bounded by one interval and
+    // then the item stops.
+    //
+    // `750` and not `-750`, from the entries and not from a cached column. The
+    // old expectation read billing.ledger_accounts.balance_minor, which treated
+    // customer_balance as a prepaid wallet seen from the subject. Under
+    // sql/001_core.sql — the shape src/types.ts publishes — customer_balance is
+    // a receivable seen from us: a charge adds to it and a payment subtracts.
+    // Same money, opposite sign, and the old expectation was reading a number
+    // maintained by meter_batch alone that any payment through src/ledger.ts
+    // would have left stale.
     assert.equal(await scalar('SELECT sum(amount_minor)::text FROM billing.charges'), '1000');
     assert.equal(
-      await scalar(`SELECT balance_minor::text FROM billing.ledger_accounts WHERE kind = 'customer_balance'`),
-      '-750',
+      await scalar(
+        `SELECT coalesce(sum(amount_minor), 0)::text FROM billing.ledger_entries
+          WHERE account = 'customer_balance'`,
+      ),
+      '750',
     );
     assert.equal(await scalar(`SELECT status FROM billing.billable_items`), 'suspended');
 

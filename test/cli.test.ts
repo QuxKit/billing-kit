@@ -18,10 +18,8 @@
 // sql/, because what is under test is the applier — order, idempotency,
 // checksums, transactions — and the shipped files would make each case a
 // several-hundred-millisecond schema build. The shipped files get their own
-// tests at the bottom, and one of them is red-by-reality: 001_core.sql and
-// 010_metering.sql collide, so `migrate` on the shipped set halts at the
-// second file. That is the SQL's documented state, not the CLI's bug, and the
-// test pins the CLI's half of it — halt, roll back, record nothing, say why.
+// tests at the bottom: all five apply in one command, and the metering group on
+// its own is refused because it needs 001_core's ledger.
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -484,7 +482,58 @@ describe('billing-kit status', () => {
 describe('billing-kit migrate against the shipped sql/', () => {
   const guard = () => (admin ? false : SKIP_REASON);
 
-  it('applies the metering group whole', async (t) => {
+  it('applies all five shipped files, in order, in one command', async (t) => {
+    if (guard()) return t.skip(SKIP_REASON);
+    await resetDatabase();
+
+    // This case used to be 'halts on the documented 001/010 collision instead
+    // of skipping past it', and it asserted status 1 with only 001_core
+    // recorded. The old expectation was not merely inconvenient — it pinned a
+    // defect. sql/001_core.sql and sql/010_metering.sql both declared
+    // billing.ledger_entries, in incompatible shapes, so the five shipped
+    // migrations could not all be applied and "one command sets up the schema"
+    // was untrue. 010 has been migrated onto 001_core's shape and no longer
+    // declares that table, so there is nothing left to halt on and a test that
+    // still demanded a halt would be demanding the defect back.
+    const r = cli(['migrate', '--database-url', TEST_URL, '--migrations', path.join(REPO, 'sql')]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /applying {5}001_core\.sql … ok/);
+    assert.match(r.stdout, /applying {5}010_metering\.sql … ok/);
+    assert.match(r.stdout, /5 applied\./);
+
+    await inTestDb(async (c) => {
+      const rows = (await c.query('SELECT filename FROM billing.schema_migrations ORDER BY filename')).rows;
+      assert.deepEqual(rows.map((x) => x.filename), [
+        '001_core.sql', '010_metering.sql', '011_partitions.sql',
+        '012_meter_batch.sql', '013_runs.sql',
+      ]);
+
+      // One ledger_entries, in 001_core's shape. `account` is the column the
+      // metering shape did not have and `account_id` is the one it did, so the
+      // pair says which definition survived rather than merely that a table
+      // exists.
+      const cols = (await c.query(
+        `SELECT column_name FROM information_schema.columns
+          WHERE table_schema = 'billing' AND table_name = 'ledger_entries'`)).rows.map((x) => x.column_name);
+      assert.ok(cols.includes('account'), 'ledger_entries should carry 001_core\'s inline account column');
+      assert.ok(!cols.includes('account_id'), 'the metering shape should be gone');
+      assert.ok(!cols.includes('leg'), 'and so should its debit/credit discriminator');
+
+      const fn = (await c.query("SELECT to_regprocedure('billing.meter_batch(integer,integer)') AS f")).rows[0].f;
+      assert.ok(fn, 'meter_batch should exist after 012');
+    });
+
+    // Re-running is a no-op, which is the other half of "one command".
+    const again = cli(['migrate', '--database-url', TEST_URL, '--migrations', path.join(REPO, 'sql')]);
+    assert.equal(again.status, 0, again.stderr);
+    assert.match(again.stdout, /nothing to apply/);
+
+    const s = cli(['status', '--database-url', TEST_URL, '--migrations', path.join(REPO, 'sql')]);
+    assert.equal(s.status, 0);
+    assert.match(s.stdout, /5 applied, 0 pending/);
+  });
+
+  it('refuses the metering group without 001_core rather than half-working', async (t) => {
     if (guard()) return t.skip(SKIP_REASON);
     await resetDatabase();
     const dir = await temp('metering');
@@ -492,42 +541,22 @@ describe('billing-kit migrate against the shipped sql/', () => {
       await cp(path.join(REPO, 'sql', name), path.join(dir, name));
     }
 
+    // This case used to be 'applies the metering group whole' and asserted
+    // status 0 with 4 applied. That expectation was correct when 010 declared
+    // its own billing.ledger_entries and the group was self-contained; it is
+    // wrong now, because meter_batch posts into 001_core's ledger and the group
+    // no longer contains one. Left asserting success it would have gone green
+    // over a schema whose first charge fails on a missing relation — the exact
+    // "fails at the first charge rather than at install" failure the version
+    // check at the top of 010 exists to prevent.
     const r = cli(['migrate', '--database-url', TEST_URL, '--migrations', dir]);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /4 applied\./);
-
-    await inTestDb(async (c) => {
-      const fn = (await c.query("SELECT to_regprocedure('billing.meter_batch(integer,integer)') AS f")).rows[0].f;
-      assert.ok(fn, 'meter_batch should exist after 012');
-      assert.equal(
-        (await c.query('SELECT count(*)::int AS n FROM billing.schema_migrations')).rows[0].n,
-        4,
-      );
-    });
-  });
-
-  it('halts on the documented 001/010 collision instead of skipping past it', async (t) => {
-    if (guard()) return t.skip(SKIP_REASON);
-    await resetDatabase();
-
-    // The shipped five cannot all be applied: sql/001_core.sql and
-    // sql/010_metering.sql declare billing.ledger_entries in two incompatible
-    // shapes, and 010 raises rather than let the second definition be silently
-    // ignored. Both files say so in their headers. This test asserts the CLI's
-    // half of that contract, not that the situation is fine.
-    const r = cli(['migrate', '--database-url', TEST_URL, '--migrations', path.join(REPO, 'sql')]);
     assert.equal(r.status, 1);
-    assert.match(r.stdout, /applying {5}001_core\.sql … ok/);
     assert.match(r.stderr, /010_metering\.sql failed and was rolled back/);
-    assert.match(r.stderr, /already exists in an incompatible shape/);
+    assert.match(r.stderr, /apply sql\/001_core\.sql before sql\/010_metering\.sql/);
 
     await inTestDb(async (c) => {
       const rows = (await c.query('SELECT filename FROM billing.schema_migrations')).rows;
-      assert.deepEqual(rows.map((x) => x.filename), ['001_core.sql'], 'only 001 should be recorded');
+      assert.deepEqual(rows.map((x) => x.filename), [], 'nothing should be recorded');
     });
-
-    // And the state is resumable: status says where it stopped.
-    const s = cli(['status', '--database-url', TEST_URL, '--migrations', path.join(REPO, 'sql')]);
-    assert.match(s.stdout, /1 applied, 4 pending/);
   });
 });

@@ -448,6 +448,19 @@ already unique on their side. Duplicate ingest returns **200 with
 either loses the event or pages someone; the whole point of an idempotent
 endpoint is that the retry is boring.
 
+That holds for a retry, which is *the same request*. A reused key carrying a
+different `quantity` or `occurred_at` is refused with `idempotency_conflict`,
+and `post()` does the same when the legs differ. The dedupe key does not cover
+the payload, so without the check the second call takes the duplicate branch
+and is answered "already recorded" — success, for a request the system never
+performed. The stored value stays and the correction is gone, with no failed
+row and no error to follow.
+
+Both silent answers are wrong and they cannot be told apart from inside the
+call: keeping the stored value discards a correction, and overwriting it lets a
+replayed stale message clobber one. So neither is chosen. `metadata` is excluded
+from the comparison — it is annotation and legitimately differs across a retry.
+
 `occurred_at` is supplied by the caller and is the partition key.
 `received_at` is the database's `now()`. Both are kept: the gap between them is
 how late data is measured, and lateness is what decides the seal delay in §4.2.
