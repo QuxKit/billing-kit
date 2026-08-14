@@ -22,6 +22,9 @@ export type { CreateSubscriptionInput, SubscriptionRef } from './store.ts';
 export { chargeSubscriptionPeriod } from './settle.ts';
 export type { ChargePeriodInput, ChargePeriodResult } from './settle.ts';
 
+export { dueSubscriptions, chargeDueSubscriptions } from './sweep.ts';
+export type { DueQuery, SweepOptions, SweepItem, SweepReport } from './sweep.ts';
+
 export { createSubscriptions } from './instance.ts';
 export type { Subscriptions, SubscriptionsOptions } from './instance.ts';
 

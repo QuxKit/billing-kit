@@ -353,6 +353,24 @@ Overage can be **tiered** — `priceTiered(quantity, tiers, 'volume' | 'graduate
 currency)` — and it rounds in the one place `price` does: the exact total across
 every tier is accumulated first and rounded once, never tier by tier.
 
+**Triggering it on time.** billing-kit ships the sweep — `chargeDueSubscriptions`,
+which finds every subscription whose period has ended and charges each — but no
+scheduler and no endpoint, for the same reason metering's `drain` is a function:
+*when* to fire, and how to authenticate the firing, belong to the host. Point a
+cron (in this stack, `ezy_cron`) at an authenticated endpoint that calls the
+sweep. It is idempotent, so an overlapping or over-frequent fire charges each
+period exactly once.
+
+```ts
+import { chargeDueSubscriptions } from 'billing-kit/subscriptions';
+
+// inside an authenticated POST /cron/charge-due:
+const report = await chargeDueSubscriptions(db, {
+  plan: (id) => PLANS[id],                              // your code catalogue
+  usageFor: (sub, period) => meterUsage(db, sub, period), // omit for flat plans
+});                                                     // { swept, charged, skipped, errors }
+```
+
 ## Database
 
 ```ts

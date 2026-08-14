@@ -44,6 +44,13 @@ CREATE TABLE IF NOT EXISTS billing.subscriptions (
 CREATE INDEX IF NOT EXISTS subscriptions_subject_idx
   ON billing.subscriptions (tenant_id, subject_id);
 
+-- Serves the sweep: "which subscriptions have reached the end of a period".
+-- Partial on the not-canceled rows, because a canceled subscription is never
+-- due and does not belong in the index the cron scans on every fire.
+CREATE INDEX IF NOT EXISTS subscriptions_due_idx
+  ON billing.subscriptions (current_period_end)
+  WHERE state <> 'canceled';
+
 -- One charged period.
 --
 -- (subscription_id, period_start) is UNIQUE, so charging the same period twice

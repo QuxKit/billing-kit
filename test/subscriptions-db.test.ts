@@ -16,6 +16,7 @@ import type { SqlExecutor } from '../src/types';
 import { definePlan } from '../src/subscriptions/plan.ts';
 import { cancelSubscription, createSubscription, getSubscription } from '../src/subscriptions/store.ts';
 import { chargeSubscriptionPeriod } from '../src/subscriptions/settle.ts';
+import { chargeDueSubscriptions, dueSubscriptions } from '../src/subscriptions/sweep.ts';
 import { fromPool, SKIP_REASON, TEST_DATABASE_URL } from './pg-executor';
 
 const usd = (v: string) => Money.fromDecimalString(v, 'USD');
@@ -130,5 +131,52 @@ describe('subscriptions persistence', { skip: harness === null ? SKIP_REASON : f
     const r = await chargeSubscriptionPeriod(db, { plan: paid, subscription: marked, now: NOW });
     assert.equal(r.subscription.state, 'canceled');
     assert.ok(r.subscription.canceledAt !== null);
+  });
+
+  it('sweeps only what is due — the time-bound trigger seam', async () => {
+    const startedAWeekAgo = new Date(NOW.getTime() - 7 * 86_400_000);
+    // Due: its monthly period would end a month after a start well in the past…
+    const back = new Date(NOW.getTime() - 40 * 86_400_000);
+    const dueSub = await createSubscription(db, { tenantId: 'sweep', subjectId: 'd1', key: 'due', plan: paid, seats: 2, startAt: back }, NOW);
+    // Not due: starts now, so its period ends a month out.
+    await createSubscription(db, { tenantId: 'sweep', subjectId: 'd2', key: 'notdue', plan: paid, seats: 2, startAt: NOW }, NOW);
+    void startedAWeekAgo;
+
+    const due = await dueSubscriptions(db, { tenantId: 'sweep', now: NOW });
+    assert.equal(due.length, 1);
+    assert.equal(due[0]!.id, dueSub.id);
+
+    const report = await chargeDueSubscriptions(db, {
+      tenantId: 'sweep',
+      now: NOW,
+      plan: (id) => (id === paid.id ? paid : undefined),
+    });
+    assert.equal(report.swept, 1);
+    assert.equal(report.charged, 1);
+    assert.equal(report.items[0]!.subscriptionId, dueSub.id);
+
+    // Idempotent: a second fire finds nothing due (the first advanced it a month).
+    const second = await chargeDueSubscriptions(db, {
+      tenantId: 'sweep',
+      now: NOW,
+      plan: (id) => (id === paid.id ? paid : undefined),
+    });
+    assert.equal(second.swept, 0);
+
+    const bal = await balance(db, { tenantId: 'sweep', subjectId: 'd1', account: 'customer_balance', currency: 'USD' });
+    assert.equal(bal.minor, 6900n, 'charged exactly once: 4900 base + 2000 seats');
+  });
+
+  it('skips a due subscription whose plan no longer resolves', async () => {
+    const back = new Date(NOW.getTime() - 40 * 86_400_000);
+    const orphan = await createSubscription(db, { tenantId: 'sweep2', subjectId: 'o1', key: 'orphan', plan: paid, seats: 1, startAt: back }, NOW);
+    const report = await chargeDueSubscriptions(db, {
+      tenantId: 'sweep2',
+      now: NOW,
+      plan: () => undefined, // catalogue lost this plan
+    });
+    assert.equal(report.swept, 1);
+    assert.equal(report.charged, 0);
+    assert.deepEqual(report.skipped, [orphan.id]);
   });
 });

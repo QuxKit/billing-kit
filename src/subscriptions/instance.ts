@@ -14,6 +14,8 @@ import {
   getSubscription,
 } from './store.ts';
 import type { CreateSubscriptionInput, SubscriptionRef } from './store.ts';
+import { chargeDueSubscriptions, dueSubscriptions } from './sweep.ts';
+import type { DueQuery, SweepOptions, SweepReport } from './sweep.ts';
 import type { Clock, SqlExecutor, TenantId } from '../types.ts';
 import type { CancelWhen, Subscription } from './types.ts';
 
@@ -30,6 +32,10 @@ export interface Subscriptions {
   /** Charge the current period and advance. `now` may still be overridden per
    *  call — a backfill that charges an old period is exactly that case. */
   chargeSubscriptionPeriod(input: ChargePeriodInput): Promise<ChargePeriodResult>;
+  /** The subscriptions whose period has ended. What a cron fires against. */
+  dueSubscriptions(query?: DueQuery): Promise<Subscription[]>;
+  /** Charge everything due. The one call an authenticated cron endpoint makes. */
+  chargeDueSubscriptions(opts: SweepOptions): Promise<SweepReport>;
 }
 
 export function createSubscriptions(opts: SubscriptionsOptions): Subscriptions {
@@ -42,5 +48,8 @@ export function createSubscriptions(opts: SubscriptionsOptions): Subscriptions {
     cancelSubscription: (ref, when) => cancelSubscription(db, ref, when, clock()),
     chargeSubscriptionPeriod: (input) =>
       chargeSubscriptionPeriod(db, { ...input, now: input.now ?? clock() }),
+    dueSubscriptions: (query) => dueSubscriptions(db, { ...query, now: query?.now ?? clock() }),
+    chargeDueSubscriptions: (opts) =>
+      chargeDueSubscriptions(db, { ...opts, now: opts.now ?? clock() }),
   };
 }
