@@ -265,6 +265,64 @@ produces a plausible wrong answer for both — a partitioned parent's primary ke
 must include the partition key, and `PARTITION BY` has no Prisma equivalent at
 all. Nothing fails and nothing warns; you find out at a hundred million rows.
 
+## CLI
+
+Applying the SQL by hand means finding five files and running them in the right
+order, again after every upgrade. `npx billing-kit` does it and records what it
+did.
+
+```
+npx billing-kit init       # write billing.config.ts (or .js) here
+npx billing-kit migrate    # apply pending files, in order, once each
+npx billing-kit status     # what is applied, what is pending
+```
+
+```
+database    postgresql://localhost:5432/app
+migrations  /app/node_modules/billing-kit/sql (5)
+
+  applied   001_core.sql     2026-08-13T01:04:42.236Z
+  pending   010_metering.sql
+
+1 applied, 1 pending
+```
+
+`migrate` records each file in `billing.schema_migrations` with a sha256 of its
+bytes, and each file is applied inside its own transaction, so a failure leaves
+neither half a schema nor a row claiming otherwise. Re-running applies nothing.
+
+If a file that has already been applied has *changed* on disk, `migrate` refuses
+and names it. Every migration tool without a checksum silently skips that file
+instead, which is how a database and the repository that produced it stop
+agreeing with nobody finding out. Resolving it is a decision — record the new
+checksum, or revert the file and write a new migration — and the tool will not
+make it for you. `status` reports the same condition and exits non-zero, so it
+can gate a deploy.
+
+`--dry-run` prints the plan and writes nothing, not even the tracking table.
+`--config <path>`, `--database-url <url>` and `--migrations <dir>` override the
+config file for one invocation.
+
+Three things worth knowing:
+
+- **`init` runs only when you type it.** There is no install hook, and there
+  will not be one. An existing config is never overwritten.
+- **The config file is read by the CLI and by nothing else.** The library still
+  takes configuration as arguments and still reads no environment — the config
+  lives in `cli/`, which nothing under `src/` imports and no `exports` entry
+  reaches. The config file reads `process.env.DATABASE_URL` on your behalf,
+  because it is your module and it runs when you run it.
+- **`pg` is an optional peer dependency.** The library stays driver-agnostic and
+  installs no driver; the CLI needs one to open a socket, loads it dynamically,
+  and tells you what to install if it is absent.
+
+Known, and not the CLI's to fix: `sql/001_core.sql` and `sql/010_metering.sql`
+declare `billing.ledger_entries` in two incompatible shapes and `010` raises
+rather than let the second definition be silently ignored (both files say so in
+their headers). So `migrate` over the shipped five stops after `001_core.sql`,
+prints Postgres's explanation, and records nothing for `010`. The metering group
+`010`–`013` applies cleanly on its own with `--migrations`.
+
 ## Design rules
 
 1. No middleware is exported. Middleware is a framework's shape and there are
