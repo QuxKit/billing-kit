@@ -1,15 +1,23 @@
 // Adversarial probes of the core money paths.
 //
-// These are red on purpose. Each failure names a real defect in the shipped
-// code — A2 and A4 in particular, where a replay carrying a *different* amount
-// is reported as a boring duplicate and the correction is silently discarded.
-// A red test that names a defect is worth more than a green suite that hides
-// one, so they stay, and they stay failing until the semantics are settled.
+// These were red on purpose, and four of them stayed red for a while: a test
+// that names a defect is worth more than a green suite that hides one. What
+// they found — A2 and A4, a replay carrying a different amount reported as a
+// boring duplicate with the correction silently discarded; A5, a real payment
+// that could not be recorded at all; A8, an allocation that gave a penny to
+// whoever sorted first — is written up case by case below.
 //
-// They live in their own directory so `prepublishOnly` can gate on the shipped
-// suite without that decision being a vote on A2/A4. `pnpm test` still runs
-// them and is still red: a developer should see this, a release should not be
-// blocked by it forever. `pnpm run test:adversarial` runs only these.
+// They are green now, all eight, and `prepublishOnly` gates on the whole suite
+// again — the split existed only because these were red, and that reason is
+// gone. They stay in their own directory because they are a different kind of
+// test: the unit suite checks that a decision was implemented, and these ask
+// what an adversary can get the system to do. Keeping them apart means a future
+// red one is legible as "something can be attacked" rather than as a failure
+// somewhere in the pile. `pnpm run test:adversarial` runs only these.
+//
+// A case name here describes what the probe FOUND, in the past tense where the
+// defect is fixed. Renaming them to describe the fix would lose the record of
+// what was once true, which is the more useful half.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import pg from 'pg';
@@ -141,7 +149,7 @@ test('A4: ledger replay with different legs is refused, not silently discarded',
   assert.equal(again.entries.length, p1.legs.length);
 });
 
-test('A5: a late payment webhook cannot be posted — no partition, no default', async () => {
+test('A5: a late payment webhook posts into the default partition', async () => {
   // What used to happen: billing.ledger_entries is PARTITION BY RANGE
   // (posted_at), ensure_core_partitions only built a window around now, and
   // there was no DEFAULT partition. A payment webhook carrying a four-month-old
@@ -220,7 +228,7 @@ test('A7: the two layers agree on what a rate literal means', async () => {
     'the same rate literal must mean the same price in both layers');
 });
 
-test('A8: allocate() is documented as largest-remainder but is not', async () => {
+test('A8: allocate() gives the leftover to the largest remainder', async () => {
   const out = allocate(Money.fromMinor(10n, 'USD'), [1n, 1n, 97n]);
   console.log('  allocate 10 over weights [1,1,97] ->', out.map((m) => m.minor.toString()));
   // largest remainder: floors are 0,0,9; remainders .1,.1,9.7 -> the leftover
