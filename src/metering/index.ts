@@ -22,6 +22,9 @@
 //     provider webhook and from nowhere else. There is no credit(amount) here
 //     to be called from a request body.
 
+export { createMetering } from './instance.ts';
+export type { Metering, MeteringOptions, BoundDrainOptions } from './instance.ts';
+
 export { drain, meterBatch, ensurePartitions, partitionReport, health } from './driver.ts';
 
 export type {
