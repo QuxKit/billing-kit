@@ -103,12 +103,47 @@ test('A4: ledger replay with different legs silently returns the OLD transaction
 });
 
 test('A5: a late payment webhook cannot be posted — no partition, no default', async () => {
+  // What used to happen: billing.ledger_entries is PARTITION BY RANGE
+  // (posted_at), ensure_core_partitions only built a window around now, and
+  // there was no DEFAULT partition. A payment webhook carrying a four-month-old
+  // occurredAt had nowhere to land and Postgres refused the insert outright —
+  // "no partition of relation ... found for row". Late webhooks are normal: a
+  // provider retries for days, a reconciliation job backfills a quarter, a
+  // dead-letter queue gets replayed. Money was being rejected for want of a
+  // partition, which is the worst thing a billing system can do.
+  //
+  // 001_core now creates a DEFAULT partition on every range-partitioned table,
+  // so a row outside every declared month is stored rather than refused. This
+  // asserts the payment posts and can be read back — not merely that nothing
+  // threw, because a posting that vanished would also not throw.
   const old = new Date(now.getTime() - 120 * 24 * 3600e3); // 4 months ago
   const p = paymentPosting({
     tenantId: 't', subjectId: 's5', paymentId: 'pay-A5',
     amount: Money.fromDecimalString('100.00', 'USD'), occurredAt: old,
   });
-  await post(db, p, now); // expect: throws 23514 "no partition of relation"
+  const posted = await post(db, p, now);
+  console.log('  posted ->', posted.entries.map((e) => `${e.account}:${e.amount.toDecimalString()}`));
+
+  assert.equal(posted.deduplicated, false);
+  assert.equal(posted.entries.length, 2);
+
+  // Readable back through the normal query path, in the right account, for the
+  // right subject, at the timestamp the provider gave us.
+  const read = await entries(db, { tenantId: 't', subjectId: 's5' });
+  assert.deepEqual(
+    read.map((e) => `${e.account}:${e.amount.toDecimalString()}`).sort(),
+    ['cash:100.00', 'customer_balance:-100.00'],
+  );
+  assert.equal(read[0]!.postedAt.getTime(), old.getTime(), 'posted at the provider timestamp, not at arrival');
+
+  const cash = await balance(db, { tenantId: 't', subjectId: 's5', account: 'cash', currency: 'USD' });
+  assert.equal(cash.toDecimalString(), '100.00');
+
+  // And it really did go to the default partition, which is what makes this a
+  // test of the backstop rather than of a lucky month boundary.
+  const { rows } = await pool.query<{ n: string }>(
+    "SELECT count(*)::text AS n FROM billing.ledger_entries_default WHERE source_id = 'pay-A5'");
+  assert.equal(rows[0]!.n, '2', 'the late payment belongs in the DEFAULT partition');
 });
 
 test('A6: entries() silently truncates at 500 — a re-derived balance is short', async () => {

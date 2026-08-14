@@ -10,15 +10,19 @@
 -- tables cannot collide with a host application's and a `search_path` change
 -- cannot make them ambiguous.
 --
--- APPLY ORDER: 010 (this), 011 (partitions), 012 (the batch function), 013
--- (the drain lease). Numbered from 010 so the whole metering group sorts after
--- sql/001_core.sql and leaves room for the core files between.
--- 011 must run before any charge is written, because the partitioned tables
--- here are created with no partitions at all and an insert into a partitioned
--- table with no matching partition fails. That is deliberate: a silently
--- unpartitioned table that works fine until a hundred million rows is the
--- failure this file exists to avoid, so the failure is moved to the first
--- insert, where it is loud and immediate.
+-- APPLY ORDER: 001_core (the ledger), then 010 (this), 011 (partitions), 012
+-- (the batch function), 013 (the drain lease). Numbered from 010 so the whole
+-- metering group sorts after sql/001_core.sql and leaves room for the core
+-- files between.
+--
+-- 001_core is a hard prerequisite and is checked below, not assumed. This
+-- engine posts into `billing.ledger_entries`, and that table is declared there.
+-- 011 must run before any charge is written, because `charges` here is created
+-- with no partitions at all and an insert into a partitioned table with no
+-- matching partition fails. That is deliberate: a silently unpartitioned table
+-- that works fine until a hundred million rows is the failure this file exists
+-- to avoid, so the failure is moved to the first insert, where it is loud and
+-- immediate.
 --
 -- Re-runnable. Every statement is guarded.
 
@@ -34,45 +38,41 @@ BEGIN
 END;
 $$;
 
--- KNOWN CONFLICT, made loud on purpose. Read this before changing it.
+-- 001_core.sql must have been applied. Named here, at install, for the same
+-- reason as the server version above: the alternative is discovering it at the
+-- first charge, from inside meter_batch, three layers away from the cause.
 --
--- sql/001_core.sql also declares billing.ledger_entries, in a different and
--- incompatible shape: it names an account with (subject_id, account, currency)
--- columns on the entry itself, where this file references a
--- billing.ledger_accounts row by account_id. Both files use
--- CREATE TABLE IF NOT EXISTS, so without this check whichever applies SECOND
--- does nothing at all, reports success, and the mistake surfaces much later as
--- meter_batch inserting into columns that are not there.
---
--- The two shapes are not both right. 001_core's matches the LedgerEntry
--- interface in src/types.ts, which is the library's declared public vocabulary,
--- so 001_core's is canonical and THIS FILE is the one to migrate. That
--- migration is not done here because it changes how the balance guard reads a
--- balance — this file caches it on ledger_accounts and 001_core derives it by
--- aggregating entries — and that is a decision for whoever owns the ledger, not
--- for the metering engine that posts into it.
---
--- Until it is resolved: fail here, saying why, rather than three layers away.
+-- Historical note, because the shape of this check is a scar. This file used to
+-- declare its OWN billing.ledger_entries — account_id into a ledger_accounts
+-- row, leg text, source_id uuid — colliding with 001_core's (subject_id,
+-- account, currency, leg_no, source_id text). Both used CREATE TABLE IF NOT
+-- EXISTS, so applying both silently kept whichever came first. 001_core's shape
+-- won, because it is the one src/types.ts publishes as `LedgerEntry`, and this
+-- file's tables and 012_meter_batch.sql were migrated onto it. The columns
+-- checked below are therefore 001_core's, and a database that has the OTHER
+-- shape is one where 010 was applied before this change; it fails here rather
+-- than writing into columns that mean something else.
 DO $$
 DECLARE
   v_missing text;
 BEGIN
-  IF to_regclass('billing.ledger_entries') IS NOT NULL THEN
-    SELECT string_agg(c, ', ' ORDER BY c) INTO v_missing
-      FROM unnest(ARRAY['transaction_id', 'account_id', 'amount_minor', 'currency',
-                        'source_kind', 'source_id', 'leg', 'posted_at']) AS c
-     WHERE NOT EXISTS (
-       SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'billing' AND table_name = 'ledger_entries' AND column_name = c);
+  IF to_regclass('billing.ledger_entries') IS NULL THEN
+    RAISE EXCEPTION 'billing.ledger_entries is missing: apply sql/001_core.sql before sql/010_metering.sql';
+  END IF;
 
-    IF v_missing IS NOT NULL THEN
-      RAISE EXCEPTION
-        'billing.ledger_entries already exists in an incompatible shape (missing: %). %',
-        v_missing,
-        'sql/001_core.sql and sql/010_metering.sql both declare this table. See the note above '
-        'this check in 010_metering.sql: 001_core''s shape is canonical and meter_batch is what '
-        'must be migrated onto it.';
-    END IF;
+  SELECT string_agg(c, ', ' ORDER BY c) INTO v_missing
+    FROM unnest(ARRAY['transaction_id', 'subject_id', 'account', 'amount_minor',
+                      'currency', 'leg_no', 'source_kind', 'source_id', 'posted_at']) AS c
+   WHERE NOT EXISTS (
+     SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'billing' AND table_name = 'ledger_entries' AND column_name = c);
+
+  IF v_missing IS NOT NULL THEN
+    RAISE EXCEPTION
+      'billing.ledger_entries exists but is not sql/001_core.sql''s shape (missing: %). %',
+      v_missing,
+      'That is the pre-migration metering shape. 001_core''s is canonical — it is the one '
+      'src/types.ts publishes as LedgerEntry — and the metering engine posts into it.';
   END IF;
 END;
 $$;
@@ -140,76 +140,46 @@ CREATE INDEX IF NOT EXISTS billable_items_due
   ON billing.billable_items (last_billed_at)
   WHERE status = 'active';
 
--- Serves the balance guard's join back from ledger_accounts to items, and the
--- host's "what is this subject paying for" query.
+-- Serves the balance guard's aggregate over a batch's subjects, and the host's
+-- "what is this subject paying for" query.
 CREATE INDEX IF NOT EXISTS billable_items_subject
   ON billing.billable_items (tenant_id, subject_id);
 
 
 -- ---------------------------------------------------------------------------
--- ledger_accounts — one balance per (subject, kind, currency)
+-- ledger_accounts — deliberately absent
 -- ---------------------------------------------------------------------------
-
-CREATE TABLE IF NOT EXISTS billing.ledger_accounts (
-  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id     text NOT NULL,
-  subject_id    text NOT NULL,
-  kind          text NOT NULL,
-  currency      char(3) NOT NULL,
-
-  -- A cache of the sum of ledger_entries for this account, maintained in the
-  -- same transaction as the entries. The entries are the truth; this column
-  -- exists so the balance guard does not aggregate the ledger once per batch.
-  -- The concurrency test re-derives it from the entries and fails if they differ.
-  balance_minor bigint NOT NULL DEFAULT 0,
-
-  created_at    timestamptz NOT NULL DEFAULT now(),
-  updated_at    timestamptz NOT NULL DEFAULT now(),
-
-  -- Serves account resolution in the metering pipeline's ledger join, and is
-  -- the conflict target for the trigger below.
-  CONSTRAINT ledger_accounts_natural_key UNIQUE (tenant_id, subject_id, kind, currency)
-);
-
-COMMENT ON COLUMN billing.ledger_accounts.balance_minor IS
-  'Signed from the subject''s point of view: positive means funded. A charge '
-  'subtracts. See 012_meter_batch.sql for the transaction''s sign convention.';
-
-/*
- * Both accounts a charge needs, created with the item rather than with the
- * charge.
- *
- * The failure this prevents: meter_batch resolves the two accounts with an
- * inner join. A missing account would drop the ledger legs while the charge row
- * and last_billed_at both advanced — money billed, clock moved, no ledger
- * record, and nothing raised. Creating them here means the join cannot miss,
- * and meter_batch asserts the leg count anyway because "cannot" is a claim and
- * an assertion is a fact.
- *
- * They cannot be created inside meter_batch's pipeline instead: rows inserted
- * by a data-modifying CTE are not visible to the other CTEs of the same
- * statement, so the join would still find nothing.
- *
- * The VALUES list is in ascending kind order so two concurrent inserts for the
- * same subject take the two unique-index entries in the same order and wait
- * rather than deadlock.
- */
-CREATE OR REPLACE FUNCTION billing.ensure_ledger_accounts() RETURNS trigger
-LANGUAGE plpgsql AS $$
-BEGIN
-  INSERT INTO billing.ledger_accounts (tenant_id, subject_id, kind, currency)
-  VALUES (NEW.tenant_id, NEW.subject_id, 'customer_balance', NEW.currency),
-         (NEW.tenant_id, NEW.subject_id, 'revenue_accrued',  NEW.currency)
-  ON CONFLICT ON CONSTRAINT ledger_accounts_natural_key DO NOTHING;
-  RETURN NEW;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS billable_items_ensure_accounts ON billing.billable_items;
-CREATE TRIGGER billable_items_ensure_accounts
-  AFTER INSERT OR UPDATE OF tenant_id, subject_id, currency
-  ON billing.billable_items
-  FOR EACH ROW EXECUTE FUNCTION billing.ensure_ledger_accounts();
+--
+-- This file used to declare a `billing.ledger_accounts` table: one row per
+-- (tenant, subject, kind, currency), with a `balance_minor` column caching the
+-- sum of that account's ledger entries, and a trigger creating the two accounts
+-- a charge needs whenever a billable item appeared. meter_batch resolved
+-- `account_id` through it and maintained the cache in the same transaction as
+-- the entries.
+--
+-- All of it is gone, and the two reasons are worth keeping.
+--
+-- The join is gone because 001_core's ledger names an account INLINE, with
+-- (subject_id, account, currency) on the entry itself. There is no account_id
+-- to resolve, so a table whose whole job was to be joined for one had nothing
+-- left to do. A table that exists only to satisfy a join that no longer happens
+-- is the kind of thing the next reader has to reverse-engineer before they can
+-- ignore it.
+--
+-- The cache is gone because it was already wrong. It was maintained by
+-- meter_batch and by nothing else, so `post()` in src/ledger.ts — which is how
+-- payments, refunds and settlements reach the ledger — moved the entries and
+-- left the cache behind. The cached number and the entries it claimed to
+-- summarise disagreed from the first payment onwards, and the balance guard
+-- read the cached one. A balance that can disagree with its own entries is not
+-- a fast path, it is a fast wrong answer.
+--
+-- The guard in 012_meter_batch.sql now derives the balance the same way
+-- `balance()` in src/ledger.ts does: SUM(amount_minor) over the entries. That
+-- is exact, has one definition in the whole library, and is bounded per batch
+-- by the subjects the batch is holding locks on. It is also linear in a
+-- subject's entry history; the measured cost and the point at which it stops
+-- being cheap are recorded above the guard itself.
 
 
 -- ---------------------------------------------------------------------------
@@ -287,52 +257,30 @@ CREATE INDEX IF NOT EXISTS charges_window_brin
 
 
 -- ---------------------------------------------------------------------------
--- ledger_entries — partitioned by RANGE (posted_at), monthly
+-- ledger_entries — declared in sql/001_core.sql, not here
 -- ---------------------------------------------------------------------------
-
-CREATE TABLE IF NOT EXISTS billing.ledger_entries (
-  id             uuid NOT NULL DEFAULT gen_random_uuid(),
-
-  -- Shared by the legs of one posting. For a metering charge this is the
-  -- charge id, so a ledger row names the charge that caused it without a join
-  -- through anything else.
-  transaction_id uuid NOT NULL,
-
-  tenant_id      text NOT NULL,
-  account_id     uuid NOT NULL REFERENCES billing.ledger_accounts (id),
-  amount_minor   bigint NOT NULL,
-  currency       char(3) NOT NULL,
-
-  source_kind    text NOT NULL,
-  source_id      uuid NOT NULL,
-  leg            text NOT NULL CHECK (leg IN ('debit', 'credit')),
-
-  posted_at      timestamptz NOT NULL DEFAULT now(),
-  memo           text,
-
-  PRIMARY KEY (id, posted_at)
-) PARTITION BY RANGE (posted_at);
-
--- Idempotency backstop for a posting: one debit and one credit per source.
 --
--- Honest about its limit: posted_at is in the key because a partitioned table's
--- unique index must include the partition key, so this constrains within a
--- partition and not across the whole table. It is not the primary guarantee and
--- was never meant to be — for metering, the guarantee is charges_item_window
--- above, plus the fact that ledger legs are inserted only from the charge
--- insert's RETURNING, in the same statement. A leg can only exist because a
--- charge row was created, and a charge row can only be created once.
-CREATE UNIQUE INDEX IF NOT EXISTS ledger_entries_source
-  ON billing.ledger_entries (source_kind, source_id, leg, posted_at);
-
--- Serves balance re-derivation and the account statement:
---   WHERE account_id = $1 AND posted_at >= $2 ORDER BY posted_at
-CREATE INDEX IF NOT EXISTS ledger_entries_account
-  ON billing.ledger_entries (account_id, posted_at);
-
--- Serves whole-period ledger scans. Append-only, so BRIN for the same reason.
-CREATE INDEX IF NOT EXISTS ledger_entries_posted_brin
-  ON billing.ledger_entries USING brin (posted_at);
+-- The table, its partitioning by RANGE (posted_at), its indexes, its
+-- append-only trigger and the deferred constraint trigger that checks a posting
+-- sums to zero all live in 001_core.sql. This file's precondition check at the
+-- top is what makes sure they are there.
+--
+-- Two guarantees this file used to provide for itself, and where they went:
+--
+--   Posting idempotency. There was a UNIQUE index on
+--   (source_kind, source_id, leg, posted_at) here, honest in its own comment
+--   about only constraining within a partition. 001_core enforces it properly
+--   instead, on the unpartitioned `billing.ledger_transactions`, whose UNIQUE
+--   (tenant_id, source_kind, source_id) holds across the whole table because it
+--   does not have to include a partition key. 012_meter_batch.sql writes that
+--   row for every charge, so replaying a posting for charge X is refused by the
+--   database rather than by the correctness of the function above it.
+--
+--   Balance re-derivation. There was an index on (account_id, posted_at);
+--   001_core's `ledger_entries_balance_idx` on
+--   (tenant_id, subject_id, account, currency, posted_at) INCLUDE (amount_minor)
+--   is the same index against the inline account columns, and serves both this
+--   engine's guard and `balance()` in src/ledger.ts.
 
 
 -- ---------------------------------------------------------------------------

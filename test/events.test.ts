@@ -168,7 +168,12 @@ describe('ingest', { skip: harness === null ? SKIP_REASON : false }, () => {
          FROM billing.usage_events WHERE external_id = $1`,
       [event.externalId],
     );
-    assert.equal(rows[0]?.partition, 'billing.usage_events_202607');
+    // `_2026m07`, not `_202607`. The `m` separator is what sql/011_partitions.sql
+    // has always produced for `charges`; the core tables used the bare form, so
+    // the schema had two conventions and billing.metering_health() measures
+    // partition runway by parsing these names. One convention, and this is the
+    // one that was already load-bearing.
+    assert.equal(rows[0]?.partition, 'billing.usage_events_2026m07');
   });
 
   it('refuses an UPDATE at the database, not only in the API', async () => {
@@ -203,15 +208,54 @@ describe('ingest', { skip: harness === null ? SKIP_REASON : false }, () => {
     // The claim and the insert are one transaction. If they were not, a crash
     // between them would claim a key with no event behind it, and no number of
     // retries could ever record that event again.
-    const event = anEvent({ occurredAt: new Date('2001-01-01T00:00:00Z') });
+    //
+    // This used to date the event to 2001 and rely on "no partition of relation"
+    // to make the insert fail. That hole is now closed — usage_events has a
+    // DEFAULT partition, so an out-of-range date lands rather than throwing, and
+    // the test stopped failing for the reason it was written.
+    //
+    // Failing the insert directly is what it always meant anyway. The property
+    // is that the claim rolls back when the insert fails, whatever the reason;
+    // borrowing a specific database error made the test hostage to that error
+    // continuing to exist, and it did not.
+    const event = anEvent();
 
-    await assert.rejects(() => record(db, event, NOW), /no partition of relation/);
+    const failingInsert = (inner: SqlExecutor): SqlExecutor => ({
+      query: (text, params) => {
+        if (text.includes('INSERT INTO billing.usage_events')) {
+          return Promise.reject(new Error('deliberate: the event insert failed'));
+        }
+        return inner.query(text, params);
+      },
+      transaction: (fn) => inner.transaction((tx) => fn(failingInsert(tx))),
+    });
+
+    await assert.rejects(() => record(failingInsert(db), event, NOW), /deliberate/);
 
     const keys = await db.query<{ count: string }>(
       'SELECT count(*)::text AS count FROM billing.usage_event_keys WHERE external_id = $1',
       [event.externalId],
     );
     assert.equal(keys[0]?.count, '0', 'the claim rolled back with the failed insert');
+  });
+
+  it('routes an event too old for any month partition into the default', async () => {
+    // The counterpart to what the test above used to rely on. A backdated event
+    // is not an error: a reconciliation job replaying a quarter is ordinary, and
+    // rejecting it loses usage that really happened. It lands in the DEFAULT
+    // partition, which is a safety net rather than a destination — see A5.
+    const event = anEvent({ occurredAt: new Date('2001-01-01T00:00:00Z') });
+
+    const result = await record(db, event, NOW);
+    assert.equal(result.deduplicated, false);
+
+    const where = await db.query<{ relname: string }>(
+      `SELECT c.relname FROM billing.usage_events e
+         JOIN pg_class c ON c.oid = e.tableoid
+        WHERE e.external_id = $1`,
+      [event.externalId],
+    );
+    assert.match(where[0]!.relname, /_default$/, 'a backdated event belongs in the default partition');
   });
 });
 

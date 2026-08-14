@@ -431,3 +431,116 @@ describe('ledger persistence', { skip: harness === null ? SKIP_REASON : false },
     }
   });
 });
+
+describe('partition maintenance', { skip: harness === null ? SKIP_REASON : false }, () => {
+  const h = harness as Harness;
+
+  const rowsIn = async (table: string, subjectId: string): Promise<number> => {
+    const rows = await h.db.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM billing.${table} WHERE subject_id = $1`,
+      [subjectId],
+    );
+    return Number(rows[0]!.n);
+  };
+
+  it('stores a posting outside every month partition, in the default', async () => {
+    // A payment webhook that arrives for a date nobody built a partition for.
+    // Without a default partition Postgres refuses the insert — "no partition
+    // of relation ... found for row" — and a real payment cannot be recorded.
+    const long = new Date(NOW.getTime() - 400 * 24 * 3600e3);
+    await post(
+      h.db,
+      paymentPosting({
+        tenantId: 't1', subjectId: 'far-past', paymentId: nextId('pay'),
+        amount: usd('42.00'), occurredAt: long,
+      }),
+      NOW,
+    );
+
+    assert.equal(await rowsIn('ledger_entries_default', 'far-past'), 2);
+
+    const cash = await balance(h.db, {
+      tenantId: 't1', subjectId: 'far-past', account: 'cash', currency: 'USD',
+    });
+    assert.equal(cash.toDecimalString(), '42.00', 'and it is part of the balance, not a row in a corner');
+  });
+
+  it('moves rows out of the default when their month partition is created', async () => {
+    // The failure this covers is the one that turns the default partition from
+    // a safety net into a trap. `CREATE TABLE ... PARTITION OF` fails outright
+    // when the default already holds a row belonging to the new range, so the
+    // first late payment would break every subsequent partition-maintenance run
+    // — and it would break it forever, silently, as a cron job that stopped
+    // creating partitions rather than as anything to do with the payment.
+    const late = new Date(NOW.getTime() - 150 * 24 * 3600e3);
+    const paymentId = nextId('pay');
+    await post(
+      h.db,
+      paymentPosting({
+        tenantId: 't1', subjectId: 'late-payment', paymentId,
+        amount: usd('7.50'), occurredAt: late,
+      }),
+      NOW,
+    );
+    assert.equal(await rowsIn('ledger_entries_default', 'late-payment'), 2, 'starts in the default');
+
+    // Widen the window backwards so the month covering `late` gets a partition.
+    // This is the call that used to be impossible once the default was dirty.
+    await h.db.query('SELECT billing.ensure_core_partitions(2, $1)', [late]);
+
+    assert.equal(await rowsIn('ledger_entries_default', 'late-payment'), 0, 'moved out of the default');
+    const month = `ledger_entries_${late.getUTCFullYear()}m${String(late.getUTCMonth() + 1).padStart(2, '0')}`;
+    assert.equal(await rowsIn(month, 'late-payment'), 2, `moved into ${month}`);
+
+    // The money did not change on the way, and the entries are still reachable
+    // through the parent rather than stranded in a partition.
+    const cash = await balance(h.db, {
+      tenantId: 't1', subjectId: 'late-payment', account: 'cash', currency: 'USD',
+    });
+    assert.equal(cash.toDecimalString(), '7.50');
+    const rows = await entries(h.db, { tenantId: 't1', subjectId: 'late-payment' });
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0]!.sourceId, paymentId);
+
+    // Rows for months that still have no partition stay put rather than being
+    // dragged along, and the default is still append-only afterwards: the move
+    // disables that trigger for the duration and must put it back.
+    assert.equal(await rowsIn('ledger_entries_default', 'far-past'), 2);
+    await assert.rejects(
+      () => h.db.query(`DELETE FROM billing.ledger_entries_default WHERE subject_id = 'far-past'`),
+      /append-only/,
+    );
+  });
+
+  it('gives every month partition exactly one UTC calendar month', async () => {
+    // Adding a month to a timestamptz resolves the calendar in the session's
+    // TimeZone, so a UTC-anchored start of 2026-07-01T00:00Z (2026-06-30 19:00
+    // in America/Chicago) plus one month landed on 2026-07-30 19:00 local =
+    // 2026-07-31T00:00Z — a day before the August partition began. Everything
+    // posted during that day belonged to no partition at all, and with a
+    // DEFAULT partition in place it would have gone there quietly instead of
+    // erroring, which is worse.
+    //
+    // Asserted per partition rather than by comparing neighbours, because
+    // ensure_core_partitions may legitimately have been called for two
+    // disjoint windows and the space between them is not a bug. Each partition
+    // starting on a UTC month boundary and ending on the next one is the whole
+    // property, and it holds whatever else has been created.
+    const rows = await h.db.query<{ bad: string }>(`
+      WITH b AS (
+        SELECT p.relname,
+               (regexp_match(pg_get_expr(p.relpartbound, p.oid), 'FROM \\(''([^'']+)''\\)'))[1]::timestamptz AS lo,
+               (regexp_match(pg_get_expr(p.relpartbound, p.oid), 'TO \\(''([^'']+)''\\)'))[1]::timestamptz AS hi
+          FROM pg_class c
+          JOIN pg_inherits i ON i.inhparent = c.oid
+          JOIN pg_class p ON p.oid = i.inhrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'billing' AND c.relname = 'ledger_entries'
+           AND pg_get_expr(p.relpartbound, p.oid) <> 'DEFAULT'
+      )
+      SELECT count(*)::text AS bad FROM b
+       WHERE lo <> (date_trunc('month', lo AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+          OR hi <> ((date_trunc('month', lo AT TIME ZONE 'UTC') + interval '1 month') AT TIME ZONE 'UTC')`);
+    assert.equal(rows[0]!.bad, '0', 'a month partition must span exactly one UTC calendar month');
+  });
+});

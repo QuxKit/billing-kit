@@ -3,9 +3,24 @@
 --   psql -v ON_ERROR_STOP=1 -f sql/011_partitions.sql
 --   SELECT billing.ensure_partitions();      -- idempotent, run it every drain
 --
--- `billing.charges` and `billing.ledger_entries` are declared PARTITION BY
--- RANGE in 001 and created with no partitions. This file supplies the function
--- that fills them in, and it must be run before the first charge is written.
+-- `billing.charges` is declared PARTITION BY RANGE in 010 and created with no
+-- partitions. This file supplies the function that fills them in, and it must
+-- be run before the first charge is written.
+--
+-- `billing.ledger_entries` is kept ahead here too, because meter_batch writes
+-- to it and the driver calls this function before every drain. It is declared
+-- in sql/001_core.sql, which has its own billing.ensure_core_partitions() that
+-- does the same job — and two partition managers for one table is normally how
+-- you get "partition would overlap partition" every month forever, from
+-- whichever one runs second.
+--
+-- What makes both safe is that neither one creates partitions itself: both
+-- delegate to billing.ensure_month_partition() from 001_core, which is keyed on
+-- the child's name, returns early when it already exists, and computes one set
+-- of UTC-anchored boundaries. Same names, same ranges, same DEFAULT backstop,
+-- same reconciliation of rows already sitting in the default. Duplicating that
+-- logic here — which is what this file used to do, with a different month-end
+-- calculation — is what would make them conflict.
 --
 -- Partitions are created AHEAD, never lazily on an insert failure (§6.3). A
 -- missing partition makes every insert into that range fail; handling that by
@@ -20,9 +35,9 @@
 -- subject table, which these reference by id.
 
 /*
- * Create monthly partitions for the metering tables, plus a DEFAULT partition
- * for each. Idempotent, cheap when there is nothing to do, safe to call from
- * every drain.
+ * Create monthly partitions for the tables meter_batch writes — `charges` and
+ * `ledger_entries` — plus a DEFAULT partition for each.
+ * Idempotent, cheap when there is nothing to do, safe to call from every drain.
  *
  * Returns the number of partitions created, which is 0 on every call but the
  * first of each month. A non-zero return from a run that was not expected to
@@ -34,6 +49,21 @@
  * only implementation works perfectly until the first long outage and then
  * fails on the recovery, which is the worst possible moment to discover it.
  * The DEFAULT partition is the backstop for a gap wider than p_months_behind.
+ *
+ * The DEFAULT partition is a deliberate trade, not an oversight. Cost: while it
+ * is NON-EMPTY, creating the next month's partition has to reconcile it under
+ * ACCESS EXCLUSIVE. Benefit: a charge outside every declared range is stored
+ * instead of raising, and a raise here means refusing to record money already
+ * owed. The trade is acceptable because the default is expected to stay empty
+ * and because it is watched: billing.partition_report() below reports its row
+ * count and billing.metering_health() raises a fault when it is not zero, so it
+ * is an alert weeks ahead rather than a locked table at month end.
+ *
+ * Both the month partitions and the default come from 001_core's
+ * billing.ensure_month_partition() / billing.ensure_default_partition(), which
+ * is also what moves rows out of a non-empty default and into the new month
+ * rather than failing on them. See their comments; the reasoning is long and it
+ * belongs in one place.
  */
 CREATE OR REPLACE FUNCTION billing.ensure_partitions(
   p_months_ahead  integer DEFAULT 3,
@@ -42,11 +72,10 @@ CREATE OR REPLACE FUNCTION billing.ensure_partitions(
 LANGUAGE plpgsql AS $$
 DECLARE
   v_created integer := 0;
-  v_parent  text;
+  v_parent  regclass;
+  v_before  integer;
+  v_after   integer;
   v_month   timestamp;
-  v_name    text;
-  v_lower   text;
-  v_upper   text;
 BEGIN
   IF p_months_ahead < 1 THEN
     RAISE EXCEPTION 'ensure_partitions: p_months_ahead must be at least 1, got %', p_months_ahead;
@@ -55,25 +84,14 @@ BEGIN
     RAISE EXCEPTION 'ensure_partitions: p_months_behind cannot be negative, got %', p_months_behind;
   END IF;
 
-  FOREACH v_parent IN ARRAY ARRAY['charges', 'ledger_entries'] LOOP
+  FOREACH v_parent IN ARRAY ARRAY['billing.charges'::regclass,
+                                  'billing.ledger_entries'::regclass] LOOP
 
-    -- The DEFAULT partition is a deliberate trade, not an oversight.
-    --
-    -- Cost: while a default partition exists and is NON-EMPTY, creating the
-    -- next month's partition must scan it to prove no row belongs in the new
-    -- range, holding ACCESS EXCLUSIVE on the default for the duration.
-    -- Benefit: a row outside every declared range is stored instead of raising,
-    -- and for `charges` a raise means refusing to record money already owed.
-    --
-    -- The trade is only acceptable because the default is expected to stay
-    -- empty: billing.partition_report() reports its row count and the health
-    -- check treats a non-empty default as a fault, so it is an alert weeks
-    -- ahead rather than a locked table at month end.
-    v_name := v_parent || '_default';
-    IF to_regclass('billing.' || quote_ident(v_name)) IS NULL THEN
-      EXECUTE format('CREATE TABLE billing.%I PARTITION OF billing.%I DEFAULT', v_name, v_parent);
-      v_created := v_created + 1;
-    END IF;
+    SELECT count(*) INTO v_before FROM pg_inherits WHERE inhparent = v_parent;
+
+    -- The default first, so that from here on there is no instant at which a
+    -- row for an unexpected month has nowhere to go.
+    PERFORM billing.ensure_default_partition(v_parent);
 
     FOR v_month IN
       SELECT generate_series(
@@ -89,17 +107,13 @@ BEGIN
                date_trunc('month', now() AT TIME ZONE 'UTC') + make_interval(months => p_months_ahead),
                interval '1 month')
     LOOP
-      v_name  := format('%s_%s', v_parent, to_char(v_month, 'YYYY"m"MM'));
-      v_lower := to_char(v_month, 'YYYY-MM-DD HH24:MI:SS') || '+00';
-      v_upper := to_char(v_month + interval '1 month', 'YYYY-MM-DD HH24:MI:SS') || '+00';
-
-      IF to_regclass('billing.' || quote_ident(v_name)) IS NULL THEN
-        EXECUTE format(
-          'CREATE TABLE billing.%I PARTITION OF billing.%I FOR VALUES FROM (%L) TO (%L)',
-          v_name, v_parent, v_lower, v_upper);
-        v_created := v_created + 1;
-      END IF;
+      PERFORM billing.ensure_month_partition(v_parent, v_month AT TIME ZONE 'UTC');
     END LOOP;
+
+    -- Counted from the catalog, so the number is what was created and not how
+    -- many times the loop went round.
+    SELECT count(*) INTO v_after FROM pg_inherits WHERE inhparent = v_parent;
+    v_created := v_created + (v_after - v_before);
 
   END LOOP;
 
@@ -145,7 +159,14 @@ BEGIN
       JOIN pg_class p    ON p.oid = i.inhrelid
       JOIN pg_namespace n ON n.oid = c.relnamespace
      WHERE n.nspname = 'billing'
-       AND c.relname IN ('charges', 'ledger_entries')
+       -- `usage_events` and `ledger_entries` belong to sql/001_core.sql and are
+       -- created by its ensure_core_partitions(), not by this file. They are
+       -- reported here anyway, because reporting is not ownership and because
+       -- this is the only surface that answers "is a default partition filling
+       -- up" — the question a DEFAULT partition exists in order to raise. A
+       -- second report keyed to the core tables would be a second place to look
+       -- during the incident that made you look at all.
+       AND c.relname IN ('charges', 'ledger_entries', 'usage_events')
      ORDER BY c.relname, p.relname
   LOOP
     EXECUTE format('SELECT count(*) FROM billing.%I', v_row.child) INTO v_n;
@@ -178,7 +199,12 @@ DECLARE
   v_default   bigint;
   v_stuck     bigint;
 BEGIN
-  FOREACH v_parent IN ARRAY ARRAY['charges', 'ledger_entries'] LOOP
+  -- Same three tables partition_report() covers, and for the same reason: a
+  -- default partition that is filling up is the fault this function exists to
+  -- surface, and it is no less a fault on the core tables than on `charges`.
+  -- The month partitions of the two core tables are created by 001_core's
+  -- ensure_core_partitions(); a runway that stops growing is what this reports.
+  FOREACH v_parent IN ARRAY ARRAY['charges', 'ledger_entries', 'usage_events'] LOOP
 
     -- The §6.2 check, stated as a question to the catalog: is this table
     -- actually partitioned, or is it the plain table `db push` leaves behind?

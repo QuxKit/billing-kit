@@ -16,7 +16,7 @@ import { createPsqlExecutor, type PsqlExecutor } from './psql-executor.ts';
 import { drain, meterBatch } from '../driver.ts';
 
 const h = createHarness('engine');
-const { createDatabase, psql, reset, scalar, seed } = h;
+const { createDatabase, fund, psql, reset, scalar, seed } = h;
 const TEST_DB = h.database;
 
 const withDb = async <T>(fn: (db: PsqlExecutor) => Promise<T>): Promise<T> => {
@@ -42,9 +42,9 @@ describe('metering exactness', () => {
     await psql(
       `INSERT INTO billing.billable_items (tenant_id, subject_id, rate_per_minute, currency, last_billed_at)
        VALUES ('t', 'tie-down', 1.5, 'USD', now() - interval '3 minutes'),
-              ('t', 'tie-up',   2.5, 'USD', now() - interval '3 minutes');
-       UPDATE billing.ledger_accounts SET balance_minor = 100000 WHERE kind = 'customer_balance';`,
+              ('t', 'tie-up',   2.5, 'USD', now() - interval '3 minutes')`,
     );
+    await fund('100000');
 
     await withDb((db) => meterBatch(db, { batch: 10, maxMinutes: 1440 }));
 
@@ -73,9 +73,9 @@ describe('metering exactness', () => {
     // except by rounding the rate, which is a 100% error here.
     await psql(
       `INSERT INTO billing.billable_items (tenant_id, subject_id, rate_per_minute, currency, last_billed_at)
-       VALUES ('t', 'micro', 0.000001200000, 'USD', now() - interval '1000 minutes');
-       UPDATE billing.ledger_accounts SET balance_minor = 100000 WHERE kind = 'customer_balance';`,
+       VALUES ('t', 'micro', 0.000001200000, 'USD', now() - interval '1000 minutes')`,
     );
+    await fund('100000');
 
     await withDb((db) => drain({ db, batch: 10, maxMinutes: 1440, runner: 'micro' }));
 
@@ -96,9 +96,9 @@ describe('metering exactness', () => {
     // must settle 5 minutes and carry the 40 seconds, not discard it.
     await psql(
       `INSERT INTO billing.billable_items (tenant_id, subject_id, rate_per_minute, currency, last_billed_at)
-       VALUES ('t', 'remainder', 1.0, 'USD', now() - interval '5 minutes 40 seconds');
-       UPDATE billing.ledger_accounts SET balance_minor = 100000 WHERE kind = 'customer_balance';`,
+       VALUES ('t', 'remainder', 1.0, 'USD', now() - interval '5 minutes 40 seconds')`,
     );
+    await fund('100000');
 
     await withDb((db) => meterBatch(db, { batch: 10, maxMinutes: 1440 }));
 
@@ -156,9 +156,9 @@ describe('metering exactness', () => {
     // were added, so the ledger can be re-derived.
     await psql(
       `INSERT INTO billing.billable_items (tenant_id, subject_id, rate_per_minute, currency, last_billed_at)
-       SELECT 't', 'exact-' || i, 0.1, 'USD', now() - interval '10 minutes' FROM generate_series(1, 60) i;
-       UPDATE billing.ledger_accounts SET balance_minor = 100000 WHERE kind = 'customer_balance';`,
+       SELECT 't', 'exact-' || i, 0.1, 'USD', now() - interval '10 minutes' FROM generate_series(1, 60) i`,
     );
+    await fund('100000');
 
     await withDb((db) => drain({ db, batch: 20, maxMinutes: 1440, runner: 'exact' }));
 

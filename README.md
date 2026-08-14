@@ -316,12 +316,18 @@ Three things worth knowing:
   installs no driver; the CLI needs one to open a socket, loads it dynamically,
   and tells you what to install if it is absent.
 
-Known, and not the CLI's to fix: `sql/001_core.sql` and `sql/010_metering.sql`
-declare `billing.ledger_entries` in two incompatible shapes and `010` raises
-rather than let the second definition be silently ignored (both files say so in
-their headers). So `migrate` over the shipped five stops after `001_core.sql`,
-prints Postgres's explanation, and records nothing for `010`. The metering group
-`010`–`013` applies cleanly on its own with `--migrations`.
+All five shipped files apply in one run. `001_core.sql` and `010_metering.sql`
+used to declare `billing.ledger_entries` in two incompatible shapes, and `010`
+raised rather than let the second definition be silently ignored, so `migrate`
+over the shipped set halted after the first file. `001_core`'s shape won — it is
+the one `LedgerEntry` in `src/types.ts` describes — and the metering engine was
+migrated onto it.
+
+`001_core.sql` also calls `billing.ensure_core_partitions()` at the end, so the
+schema can take a row the moment it exists. Without that the file defined the
+function and never ran it, and a freshly migrated database had no partitions at
+all: every insert failed with *no partition of relation* until somebody knew to
+call it by hand.
 
 ## Design rules
 

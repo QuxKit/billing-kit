@@ -7,23 +7,37 @@ partition key, BRIN indexes, and the batch function itself (ARCHITECTURE.md
 
 `npx billing-kit migrate` applies a directory of these in order, once each,
 tracked in `billing.schema_migrations` and checksummed so an already-applied
-file that was edited is refused rather than skipped. It cannot yet be pointed at
-the whole of `sql/`: `001_core.sql` and this file collide on
-`billing.ledger_entries` (see the check at the top of `010_metering.sql`), so
-`migrate` over all five halts after `001` with Postgres's explanation. Until
-that is resolved, the metering group applies on its own from a directory holding
-only these four.
+file that was edited is refused rather than skipped. Point it at the whole of
+`sql/` — all five apply in one run.
+
+They did not, until recently. `001_core.sql` and `010_metering.sql` each
+declared `billing.ledger_entries`, in shapes that could not both be right, and
+because both used `CREATE TABLE IF NOT EXISTS` the second simply did nothing and
+reported success. `010` raised instead of allowing that, so `migrate` halted
+after the first file. `001_core`'s shape won — it names an account inline with
+`(subject_id, account, currency)`, which is what `LedgerEntry` in `src/types.ts`
+describes — and `012_meter_batch.sql` was migrated onto it. `ledger_accounts`
+went with it: its only job was to be joined for an `account_id` that no longer
+exists, and its cached `balance_minor` was maintained by `meter_batch` alone, so
+every payment posted through `src/ledger.ts` desynchronised it silently.
 
 By hand it is one psql per file, in this order, and nothing records that you
 did:
 
 ```
+psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/001_core.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/010_metering.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/011_partitions.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/012_meter_batch.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/013_runs.sql
 psql -d "$DATABASE" -c 'SELECT billing.ensure_partitions()'
 ```
+
+`001_core.sql` was missing from that list, which is its own small version of the
+same problem: the core tables are what everything else references. It calls
+`billing.ensure_core_partitions()` itself at the end, so the core tables can
+take a row immediately; `ensure_partitions()` above covers the metering tables
+`011` adds.
 
 Every file is re-runnable. Run all four after every `prisma db push` or
 `prisma migrate deploy`, for the reason `ai_member/scripts/index-db.ts`
@@ -32,7 +46,7 @@ schema, and none of this is in the schema.
 
 | File | Contents |
 |---|---|
-| `010_metering.sql` | Tables and indexes. `billable_items`, `charges`, `ledger_accounts`, `ledger_entries`, `meter_runs`. |
+| `010_metering.sql` | Tables and indexes. `billable_items`, `charges`, `meter_runs`. Not `ledger_entries` and not `ledger_accounts` — see below. |
 | `011_partitions.sql` | `ensure_partitions()`, `partition_report()`, `metering_health()`. |
 | `012_meter_batch.sql` | `round_half_even()` and `meter_batch()` — the engine. |
 | `013_runs.sql` | `claim_meter_run()`, `heartbeat_meter_run()`, `settle_meter_run()` — the drain lease. |
@@ -94,7 +108,7 @@ write amplification with a comment.
 | Index | Serves |
 |---|---|
 | `billable_items_due` on `(last_billed_at) WHERE status='active'` | The due-scan in `meter_batch`: `WHERE status='active' AND last_billed_at <= now() - interval '1 minute' ORDER BY last_billed_at LIMIT n FOR UPDATE SKIP LOCKED`. Partial, so it holds the active set rather than the whole table — a cancelled estate that outgrows the active one is the normal end state of a subscription product. `last_billed_at` leads so the index satisfies the `ORDER BY` and `LIMIT` stops early instead of sorting every due row. |
-| `billable_items_subject` on `(tenant_id, subject_id)` | The balance guard's join from `ledger_accounts` back to items, and "what is this subject paying for". |
+| `billable_items_subject` on `(tenant_id, subject_id)` | The overdraft guard's per-subject lookup, and "what is this subject paying for". It used to reach the subject through `ledger_accounts`; the guard now sums `ledger_entries` for the subject directly. |
 
 The predicate is written `last_billed_at <= now() - interval '1 minute'` and not
 `last_billed_at + interval '1 minute' <= now()`. Same predicate; only the first
@@ -118,15 +132,33 @@ Limit -> LockRows -> Index Scan using billable_items_due
 
 | Index | Serves |
 |---|---|
-| `ledger_entries_source` UNIQUE on `(source_kind, source_id, leg, posted_at)` | Idempotency backstop: one debit and one credit per source. Honest about its limit — `posted_at` is in the key because a partitioned table's unique index must include the partition key, so it constrains within a partition. It is not the primary guarantee for metering; `charges_item_window` is, plus the fact that legs are inserted only from the charge insert's `RETURNING`, in the same statement. |
-| `ledger_entries_account` on `(account_id, posted_at)` | Balance re-derivation and the account statement. |
-| `ledger_entries_posted_brin` BRIN on `(posted_at)` | Whole-period ledger scans. Append-only, same reasoning. |
-
-### `ledger_accounts`, `meter_runs`
+This table is declared in `001_core.sql` and nowhere else. The rows below used
+to describe `010_metering.sql`'s competing definition — `account_id` into a
+`ledger_accounts` row, `leg` constrained to debit/credit — which is the shape
+that lost. What exists now:
 
 | Index | Serves |
 |---|---|
-| `ledger_accounts_natural_key` UNIQUE on `(tenant_id, subject_id, kind, currency)` | Account resolution in the pipeline's ledger join; conflict target for the account-creation trigger. |
+| `ledger_entries_transaction_idx` on `(transaction_id)` | Reading a transaction's legs back: `entriesOfTransaction` in `src/ledger.ts`, which is also what `post()` compares against when an idempotency key is replayed. |
+| `ledger_entries_balance_idx` on `(tenant_id, subject_id, account, currency, posted_at)` INCLUDE `(amount_minor)` | `balance()` and the overdraft guard in `012_meter_batch.sql`, which are the same query: `SUM(amount_minor)` over one account. `amount_minor` is INCLUDEd so the aggregate can be index-only rather than fetching every heap tuple. |
+
+Two indexes from the old shape are **not** carried over, and neither loss is
+accidental:
+
+- `ledger_entries_source` UNIQUE on `(source_kind, source_id, leg, …)` was an
+  idempotency backstop. `leg` no longer exists, and the guarantee it approximated
+  now lives one level up and exactly: `ledger_transactions` is UNIQUE on
+  `(tenant_id, source_kind, source_id)`, so a source can claim one transaction,
+  and `post()` refuses a replay whose legs differ from the ones recorded.
+- `ledger_entries_posted_brin` BRIN on `(posted_at)` served whole-period scans.
+  Partition pruning on `posted_at` now does that job — the table is
+  `PARTITION BY RANGE (posted_at)`, so a period scan reads the months it needs
+  and skips the rest without an index at all.
+
+### `meter_runs`
+
+| Index | Serves |
+|---|---|
 | `meter_runs_recent` on `(started_at DESC)` | "What have the last N runs done." |
 | `meter_runs_in_flight` on `(heartbeat_at) WHERE status='running'` | The drain lease check and the stuck-run alert. Partial, so it stays the size of the running set however long the history grows. |
 
