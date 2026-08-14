@@ -44,8 +44,14 @@ export type { BillingFailure, BillingErrorCode } from './errors';
 export { createBilling } from './instance';
 export type { Billing, BillingOptions } from './instance';
 
-export { record, recordMany, queryUsage, validateEvent } from './events';
-export type { UsageQuery, StoredUsageEvent } from './events';
+export { record, recordMany, queryUsage, aggregateUsage, validateEvent } from './events';
+export type {
+  UsageQuery,
+  StoredUsageEvent,
+  AggregationMethod,
+  AggregateUsageQuery,
+  UsageAggregation,
+} from './events';
 
 export {
   post,

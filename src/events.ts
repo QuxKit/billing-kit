@@ -495,3 +495,100 @@ export async function queryUsage(db: SqlExecutor, q: UsageQuery): Promise<Stored
     metadata: row.metadata,
   }));
 }
+
+/**
+ * How a metric's events collapse to one billable quantity for a window.
+ *
+ *   sum     total of the quantities — tokens, GB, requests. The default.
+ *   count   how many events happened, quantity ignored — API calls, messages.
+ *   max     the peak quantity in the window — seats provisioned, peak workers,
+ *           the "high-water mark" a plan bills on.
+ *   unique  distinct values of a metadata field — unique users, unique projects.
+ *           Two events with the same value count once.
+ */
+export type AggregationMethod = 'sum' | 'count' | 'max' | 'unique';
+
+export interface AggregateUsageQuery {
+  tenantId: TenantId;
+  subjectId: SubjectId;
+  metric: string;
+  window: UsageWindow;
+  method: AggregationMethod;
+  /**
+   * For `unique`: the metadata key whose distinct values are counted. Events
+   * whose metadata lacks the key do not count — COUNT(DISTINCT) ignores nulls —
+   * which is the right behaviour: an event that did not carry the dimension is
+   * not a value of it.
+   */
+  uniqueBy?: string;
+}
+
+export interface UsageAggregation {
+  method: AggregationMethod;
+  metric: string;
+  window: UsageWindow;
+  /** The aggregate as an exact Quantity. count/unique are whole; sum/max keep
+   *  the events' scale. */
+  quantity: Quantity;
+  /** Events considered — the row count, regardless of method. */
+  eventCount: number;
+}
+
+/**
+ * Collapse a metric's events over a window to one billable quantity.
+ *
+ * The aggregation runs in Postgres, not by paging rows into the process: a
+ * window can hold millions of events, and `SUM`/`MAX`/`COUNT(DISTINCT)` over
+ * `NUMERIC` are exact there (SUM widens to NUMERIC and cannot overflow), so the
+ * quantity that feeds a charge is computed once, in the database, the same way
+ * the ledger's balance is. The result is a `Quantity` — never a JS number — so
+ * it drops straight into `price` or a plan's overage with no lossy hop.
+ *
+ * This is the piece a subscription's `usageFor` wires to: for each metered
+ * component, aggregate its metric over the period and hand the quantities back.
+ */
+export async function aggregateUsage(db: SqlExecutor, q: AggregateUsageQuery): Promise<UsageAggregation> {
+  if (q.window.end.getTime() <= q.window.start.getTime()) {
+    throw new BillingError({ code: 'window_invalid', reason: 'end must be after start' });
+  }
+  if (q.method === 'unique' && !q.uniqueBy) {
+    throw new BillingError({ code: 'window_invalid', reason: "unique aggregation needs a 'uniqueBy' metadata key" });
+  }
+
+  // The method is a closed enum this function owns, never caller SQL, so
+  // selecting the expression by it is not an injection surface. The unique key
+  // is a bound parameter ($6), not interpolated.
+  const expr =
+    q.method === 'sum'
+      ? 'COALESCE(SUM(quantity), 0)::text'
+      : q.method === 'max'
+        ? 'COALESCE(MAX(quantity), 0)::text'
+        : q.method === 'count'
+          ? 'COUNT(*)::text'
+          : 'COUNT(DISTINCT metadata ->> $6)::text';
+
+  const params: unknown[] = [q.tenantId, q.subjectId, q.metric, q.window.start, q.window.end];
+  if (q.method === 'unique') params.push(q.uniqueBy);
+
+  const rows = await db.query<{ value: string; cnt: string }>(
+    `SELECT ${expr} AS value, COUNT(*)::text AS cnt
+       FROM billing.usage_events
+      WHERE tenant_id = $1
+        AND subject_id = $2
+        AND metric = $3
+        AND occurred_at >= $4
+        AND occurred_at <  $5`,
+    params,
+  );
+
+  const row = rows[0];
+  return {
+    method: q.method,
+    metric: q.metric,
+    window: q.window,
+    // A decimal string for every method — sum/max keep NUMERIC's scale, count/
+    // unique are integers rendered the same way. Never through a JS number.
+    quantity: Quantity.fromDecimalString(row?.value ?? '0'),
+    eventCount: Number(row?.cnt ?? '0'),
+  };
+}

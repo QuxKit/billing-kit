@@ -20,7 +20,7 @@ first-class; **delegated**: handled by the payment provider through the adapter;
 | Capability | Lago | billing-kit today | Call |
 |---|---|---|---|
 | Metering — event ingest, dedup/idempotency | ✅ | **core**, idempotent by caller key | — |
-| Aggregation — sum / count / max / unique | ✅ all four | **core** (sum); others not all first-class | soon |
+| Aggregation — sum / count / max / unique | ✅ all four | **core** — all four via `aggregateUsage` | ✅ **shipped** |
 | Exact money — integer minor units, ISO 4217 | partial | **core**, stronger; re-derivable | **our edge** |
 | Double-entry, append-only ledger | not the model | **core** | **our edge** |
 | Multi-currency | partial | **core**, per-currency balances | **our edge** |
@@ -126,8 +126,9 @@ This is the smallest change that closes the biggest gap and stays true to the
 5. ✅ Credit notes — `creditNotePosting`, the compensating posting append-only
    made the correct shape already.
 
-**SOON — what is left:**
-6. Remaining aggregations (max, unique) as first-class metering options.
+6. ✅ Aggregation — `aggregateUsage` computes sum / count / max / unique in
+   Postgres, returning an exact `Quantity` per window; `unique` counts distinct
+   values of a metadata dimension.
 
 **LATER — external by design, or a reporting layer:**
 7. Taxes — keep the interface; add an adapter (Anrok/Avalara) rather than an engine.

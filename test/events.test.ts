@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 
 import { BillingError } from '../src/errors';
-import { queryUsage, record, recordMany, validateEvent } from '../src/events';
+import { aggregateUsage, queryUsage, record, recordMany, validateEvent } from '../src/events';
 import { Quantity } from '../src/money';
 import type { SqlExecutor, UsageEvent } from '../src/types';
 import { SKIP_REASON, setupDatabase, type Harness } from './pg-executor';
@@ -423,6 +423,68 @@ describe('queryUsage', { skip: harness === null ? SKIP_REASON : false }, () => {
           subjectId: 'subject-1',
           window: { start: new Date('2026-08-13T12:00:00Z'), end: new Date('2026-08-13T10:00:00Z') },
         }),
+      (e: unknown) => BillingError.hasCode(e, 'window_invalid'),
+    );
+  });
+});
+
+describe('aggregateUsage — sum / count / max / unique', { skip: harness === null ? SKIP_REASON : false }, () => {
+  const h = harness as Harness;
+  const WINDOW = { start: new Date('2026-08-13T00:00:00Z'), end: new Date('2026-08-14T00:00:00Z') };
+
+  // Four events for one subject/metric, with distinct quantities and a 'user'
+  // dimension in metadata — alice twice, bob once, carol once.
+  const seed = async (db: SqlExecutor, subjectId: string) => {
+    const at = new Date('2026-08-13T10:00:00Z');
+    const evs: [bigint, string][] = [[10n, 'alice'], [40n, 'bob'], [25n, 'alice'], [5n, 'carol']];
+    let i = 0;
+    for (const [qty, user] of evs) {
+      i += 1;
+      await record(
+        db,
+        {
+          tenantId: 'agg', subjectId, source: 'api', externalId: `e-${subjectId}-${i}`,
+          metric: 'calls', quantity: Quantity.fromBigInt(qty), occurredAt: at, metadata: { user },
+        },
+        NOW,
+      );
+    }
+  };
+
+  it('sums the quantities', async () => {
+    await seed(h.db, 's-sum');
+    const r = await aggregateUsage(h.db, { tenantId: 'agg', subjectId: 's-sum', metric: 'calls', window: WINDOW, method: 'sum' });
+    assert.equal(r.quantity.toDecimalString(), '80.000000000000'); // 10+40+25+5
+    assert.equal(r.eventCount, 4);
+  });
+
+  it('counts the events, ignoring quantity', async () => {
+    await seed(h.db, 's-count');
+    const r = await aggregateUsage(h.db, { tenantId: 'agg', subjectId: 's-count', metric: 'calls', window: WINDOW, method: 'count' });
+    assert.equal(r.quantity.toDecimalString(), '4.000000000000');
+  });
+
+  it('takes the peak quantity', async () => {
+    await seed(h.db, 's-max');
+    const r = await aggregateUsage(h.db, { tenantId: 'agg', subjectId: 's-max', metric: 'calls', window: WINDOW, method: 'max' });
+    assert.equal(r.quantity.toDecimalString(), '40.000000000000');
+  });
+
+  it('counts distinct values of a metadata dimension', async () => {
+    await seed(h.db, 's-uniq');
+    const r = await aggregateUsage(h.db, { tenantId: 'agg', subjectId: 's-uniq', metric: 'calls', window: WINDOW, method: 'unique', uniqueBy: 'user' });
+    assert.equal(r.quantity.toDecimalString(), '3.000000000000'); // alice, bob, carol
+  });
+
+  it('is zero over an empty window, not an error', async () => {
+    const r = await aggregateUsage(h.db, { tenantId: 'agg', subjectId: 'nobody', metric: 'calls', window: WINDOW, method: 'sum' });
+    assert.equal(r.quantity.isZero(), true);
+    assert.equal(r.eventCount, 0);
+  });
+
+  it('refuses a unique aggregation with no key', async () => {
+    await assert.rejects(
+      () => aggregateUsage(h.db, { tenantId: 'agg', subjectId: 's-uniq', metric: 'calls', window: WINDOW, method: 'unique' }),
       (e: unknown) => BillingError.hasCode(e, 'window_invalid'),
     );
   });

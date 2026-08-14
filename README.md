@@ -85,6 +85,7 @@ system*. Everything below is how it earns the word "correct."
 | Usage ingest + idempotency | `billing-kit` | ✅ implemented, tested |
 | Double-entry ledger | `billing-kit` | ✅ implemented, tested |
 | Metering engine | `billing-kit/metering` | ✅ implemented, tested |
+| Usage aggregation — sum / count / max / unique | `billing-kit` | ✅ implemented, tested |
 | Tiered pricing — volume / graduated | `billing-kit` | ✅ implemented, tested |
 | Subscriptions — plans, seats, overage, proration, trials | `billing-kit/subscriptions` | ✅ implemented, tested |
 | Coupons / discounts | `billing-kit/subscriptions` | ✅ implemented, tested |
@@ -251,6 +252,31 @@ Only what determines the bill is.
 `occurredAt` is the caller's and is the partition key. `receivedAt` is the
 database's. Both are kept, because the gap between them is how lateness is
 measured, and lateness is what decides when a window can be sealed.
+
+## Aggregation
+
+Events collapse to one billable quantity per window, four ways — the same set a
+metered plan chooses from:
+
+```ts
+import { aggregateUsage } from 'billing-kit';
+
+const { quantity } = await aggregateUsage(db, {
+  tenantId: 'acme', subjectId: 'user_123', metric: 'api.calls',
+  window: { start, end }, method: 'sum',   // 'sum' | 'count' | 'max' | 'unique'
+  // uniqueBy: 'user',                      // for 'unique': the metadata dimension
+});
+```
+
+- **sum** — total of the quantities (tokens, GB). **count** — how many events,
+  quantity ignored (requests, messages). **max** — the peak in the window (seats,
+  concurrent workers). **unique** — distinct values of a metadata field (unique
+  users), where two events with the same value count once.
+- It aggregates **in Postgres**, not by paging rows into the process: a window can
+  hold millions of events, and `SUM`/`MAX`/`COUNT(DISTINCT)` over `NUMERIC` are
+  exact there. The result is a `Quantity`, never a JS number, so it drops straight
+  into `price` or a plan's overage — this is what a subscription's `usageFor` wires
+  to.
 
 ## Ledger
 
