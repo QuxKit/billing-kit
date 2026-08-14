@@ -137,6 +137,14 @@ billing-kit is not a tax engine, a dunning system, a pricing UI, an accounting
 system, or a payment processor. It has interfaces where those attach and no
 opinions inside them.
 
+It is also not a tenancy system. Every ingest row carries a `tenantId`, and
+this library never verifies one — by design, it cannot. What billing-kit
+assumes about that field, and the sibling library
+([tenant-kit](http://localhost:3003/brett/tenant-kit)) that makes the
+assumption true — request→tenant resolution, memberships, row-level-security
+isolation over these very tables — is
+[docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md).
+
 ## Money
 
 The rule, which the type system enforces rather than the documentation:
