@@ -1,5 +1,5 @@
 {
-  "name": "billing-kit",
+  "name": "@quxkit/billing-kit",
   "version": "0.1.0",
   "description": "Usage-based billing as a library, over a provider you choose.",
   "license": "Apache-2.0",
