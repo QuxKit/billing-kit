@@ -514,6 +514,12 @@ export class Quantity extends ExactDecimal {
     return new Quantity(this.units + other.units);
   }
 
+  /** May go negative; the caller decides whether that is meaningful. Used for
+   *  `usage − included`, where a negative result means the allowance covered it. */
+  minus(other: Quantity): Quantity {
+    return new Quantity(this.units - other.units);
+  }
+
   static sum(quantities: Iterable<Quantity>): Quantity {
     let total = 0n;
     for (const q of quantities) total += q.units;
@@ -523,6 +529,25 @@ export class Quantity extends ExactDecimal {
   isQuantity(): boolean {
     return this.#quantity;
   }
+}
+
+/**
+ * Scale an amount by an exact fraction `numerator / denominator`, rounding once
+ * (half-to-even). The proration primitive: a monthly fee charged for the days a
+ * subscription was actually active is `scaleFraction(fee, activeDays, monthDays)`.
+ *
+ * Kept here, not in the subscriptions module, so the one-rounding-site rule
+ * holds: proration is a rounding of a fraction, and it rounds through the same
+ * half-to-even path as `price`, never a second implementation of it.
+ */
+export function scaleFraction(amount: Money, numerator: bigint, denominator: bigint): Money {
+  if (denominator <= 0n) {
+    throw new BillingError({ code: 'invalid_allocation', reason: 'denominator must be positive' });
+  }
+  if (numerator < 0n) {
+    throw new BillingError({ code: 'invalid_allocation', reason: 'numerator must be non-negative' });
+  }
+  return Money.fromMinor(divideHalfEven(amount.minor * numerator, denominator), amount.currency);
 }
 
 // --- the one rounding site --------------------------------------------------
@@ -563,32 +588,142 @@ export function price(quantity: Quantity, rate: Rate, currency: string): PricedA
   //
   // quantity and rate are each scaled by 10^12, so their product is scaled by
   // 10^24, and that product is minor units directly.
-  const productUnits = quantity.units * rate.units;
-  const productScale = DECIMAL_SCALE * 2;
+  return roundProduct(quantity.units * rate.units, currency);
+}
 
-  let minor: bigint;
-  let exactMinor: string;
+/** The scale of `quantity.units * rate.units`: two exact decimals multiplied. */
+const PRODUCT_SCALE = DECIMAL_SCALE * 2;
+const PRODUCT_UNIT = pow10(PRODUCT_SCALE);
 
-  if (productScale >= 0) {
-    const divisor = pow10(productScale);
-    minor = divideHalfEven(productUnits, divisor);
-    exactMinor = renderScaled(productUnits, productScale);
-  } else {
-    // Only reachable for a currency with more fractional digits than 24, which
-    // does not exist. Handled rather than asserted so the branch is total.
-    const multiplier = pow10(-productScale);
-    minor = productUnits * multiplier;
-    exactMinor = (productUnits * multiplier).toString();
+/**
+ * Round an exact product (scaled by 10^24) to minor units — the one rounding
+ * site, half-to-even, keeping the pre-rounding value.
+ *
+ * Factored out of `price` so that tiered pricing can accumulate an exact total
+ * across several tiers and still round it in exactly one place. Rounding each
+ * tier's subtotal instead would reintroduce the per-row drift `price` was built
+ * to avoid, one tier at a time.
+ */
+function roundProduct(productUnits: bigint, currency: string): PricedAmount {
+  const minor = divideHalfEven(productUnits, PRODUCT_UNIT);
+  const residueUnits = productUnits - minor * PRODUCT_UNIT;
+  return {
+    amount: Money.fromMinor(minor, currency),
+    exactMinor: renderScaled(productUnits, PRODUCT_SCALE),
+    residueMinor: renderScaled(residueUnits, PRODUCT_SCALE),
+  };
+}
+
+// --- tiered pricing ---------------------------------------------------------
+
+/**
+ * One band of a tiered price. Covers cumulative quantity up to and including
+ * `upTo`; the last tier sets `upTo: null` to mean unbounded.
+ *
+ * `rate` is minor units per unit, the same convention as everywhere else.
+ * `flat` is an optional fixed fee for the tier — a fixed platform charge on top
+ * of the per-unit rate — charged once when the tier is reached.
+ */
+export interface Tier {
+  upTo: Quantity | null;
+  rate: Rate;
+  flat?: Money;
+}
+
+/**
+ * How a set of tiers applies to a quantity.
+ *
+ * `volume` — the whole quantity is priced at the single tier its total lands in.
+ *   Cross a threshold and every unit gets the cheaper rate, retroactively.
+ * `graduated` — each unit is priced in the tier it falls into. The first N units
+ *   at the first rate, the next block at the second, and so on. Crossing a
+ *   threshold only changes the price of units above it.
+ *
+ * The two give different totals for the same quantity, and picking the wrong one
+ * is a silent pricing error — hence an explicit argument with no default.
+ */
+export type TierMode = 'volume' | 'graduated';
+
+function assertTiers(tiers: readonly Tier[], currency: string): void {
+  if (tiers.length === 0) {
+    throw new BillingError({ code: 'invalid_tiers', reason: 'no tiers' });
+  }
+  let previous: bigint | null = null;
+  for (let i = 0; i < tiers.length; i++) {
+    const tier = tiers[i]!;
+    const isLast = i === tiers.length - 1;
+    if (tier.flat && tier.flat.currency !== currency) {
+      throw new BillingError({
+        code: 'currency_mismatch',
+        left: currency,
+        right: tier.flat.currency,
+      });
+    }
+    if (tier.upTo === null) {
+      if (!isLast) {
+        throw new BillingError({ code: 'invalid_tiers', reason: `unbounded tier ${i} is not last` });
+      }
+      continue;
+    }
+    if (isLast) {
+      // A bounded last tier is allowed — usage above it simply is not priced —
+      // but it is far more often a forgotten `upTo: null`, so it is refused.
+      throw new BillingError({ code: 'invalid_tiers', reason: 'last tier must be unbounded (upTo: null)' });
+    }
+    if (tier.upTo.units <= 0n) {
+      throw new BillingError({ code: 'invalid_tiers', reason: `tier ${i} boundary must be positive` });
+    }
+    if (previous !== null && tier.upTo.units <= previous) {
+      throw new BillingError({ code: 'invalid_tiers', reason: `tier ${i} boundary is not above the one before it` });
+    }
+    previous = tier.upTo.units;
+  }
+}
+
+/**
+ * Price a quantity across tiers, rounding once at the end.
+ *
+ * The exact contribution of every tier is accumulated in product units (scale
+ * 24), and any per-tier flat is lifted into the same scale, so the whole price —
+ * usage and flats, across all tiers — is rounded a single time. `exactMinor` and
+ * `residueMinor` describe that one rounding, exactly as `price` does.
+ */
+export function priceTiered(
+  quantity: Quantity,
+  tiers: readonly Tier[],
+  mode: TierMode,
+  currency: string,
+): PricedAmount {
+  currencyExponent(currency);
+  assertTiers(tiers, currency);
+  if (quantity.isNegative()) {
+    throw new BillingError({ code: 'invalid_tiers', reason: 'quantity is negative' });
   }
 
-  const amount = Money.fromMinor(minor, currency);
-  const residueUnits = productUnits - minor * (productScale >= 0 ? pow10(productScale) : 1n);
+  const q = quantity.units;
+  let productUnits = 0n;
 
-  return {
-    amount,
-    exactMinor,
-    residueMinor: productScale >= 0 ? renderScaled(residueUnits, productScale) : '0',
-  };
+  if (mode === 'volume') {
+    // The whole quantity at the rate of the tier it lands in.
+    const tier = tiers.find((t) => t.upTo === null || q <= t.upTo.units)!;
+    productUnits += q * tier.rate.units;
+    if (tier.flat) productUnits += tier.flat.minor * PRODUCT_UNIT;
+  } else {
+    // Each block of quantity at its own tier's rate.
+    let lower = 0n;
+    for (const tier of tiers) {
+      const upper = tier.upTo === null ? q : tier.upTo.units;
+      const portion = (q < upper ? q : upper) - lower;
+      if (portion > 0n) {
+        productUnits += portion * tier.rate.units;
+        if (tier.flat) productUnits += tier.flat.minor * PRODUCT_UNIT;
+      }
+      lower = upper;
+      if (q <= upper) break;
+    }
+  }
+
+  return roundProduct(productUnits, currency);
 }
 
 /**

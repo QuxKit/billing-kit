@@ -85,12 +85,15 @@ system*. Everything below is how it earns the word "correct."
 | Usage ingest + idempotency | `billing-kit` | ✅ implemented, tested |
 | Double-entry ledger | `billing-kit` | ✅ implemented, tested |
 | Metering engine | `billing-kit/metering` | ✅ implemented, tested |
+| Tiered pricing — volume / graduated | `billing-kit` | ✅ implemented, tested |
+| Subscriptions — plans, seats, overage, proration, trials | `billing-kit/subscriptions` | ✅ implemented, tested |
 | Provider adapters — Stripe, Paddle | `billing-kit/providers` | ✅ implemented, tested |
 
-Metering and providers are **separate entry points**, not re-exports from the
-root, so an application using one does not compile the others. Import
-`billing-kit/metering` for the batch driver and `billing-kit/providers` for the
-adapter interface and its two implementations.
+Metering, subscriptions and providers are **separate entry points**, not
+re-exports from the root, so an application using one does not compile the
+others. Import `billing-kit/metering` for the batch driver,
+`billing-kit/subscriptions` for recurring plans, and `billing-kit/providers` for
+the adapter interface and its two implementations.
 
 The ledger and money tests run against a real Postgres. `pnpm run test:unit` is
 green, and so is `pnpm run test:adversarial` — the suite of probes that used to
@@ -121,8 +124,11 @@ implemented.
 | The ledger — append-only, double-entry | It is the financial record. It has to survive changing providers. |
 | Idempotency | Every provider's idempotency window is finite and shorter than your incident. |
 
-The provider does customers, subscriptions, settlement of a closed period,
-payment capture, refunds, and webhook signature verification. Nothing else.
+The provider does customers, settlement of a closed period, payment capture,
+refunds, and webhook signature verification. Recurring plans — what a period
+costs, from a base fee, seats, an included allowance and metered overage — are
+billing-kit's own (`billing-kit/subscriptions`), because that is billing logic
+you must be able to answer for; the provider still captures the money.
 
 billing-kit is not a tax engine, a dunning system, a pricing UI, an accounting
 system, or a payment processor. It has interfaces where those attach and no
@@ -307,6 +313,45 @@ Settlement carries the estimate/authority split: under `quantity` settlement, or
 with a merchant-of-record provider, the provider's number is authoritative and
 ours was an estimate. The difference posts to `settlement_variance`, where a
 non-zero balance is an alert. It is never absorbed into revenue.
+
+## Subscriptions
+
+Recurring plans, priced on our side of the settle line. A plan is defined in
+code — a base fee, optional seats, an included allowance and metered overage
+(flat or tiered) — and `chargeForPeriod` turns a period's usage into a set of
+lines that sum to a total. It is pure: no database, so it can be tested and
+shown to a customer as a preview.
+
+```ts
+import { Money, Quantity, Rate } from 'billing-kit';
+import { definePlan, chargeForPeriod } from 'billing-kit/subscriptions';
+
+const pro = definePlan({
+  id: 'pro', currency: 'USD', interval: 'month',
+  flat: Money.fromDecimalString('49.00', 'USD'),
+  seats: { unit: Money.fromDecimalString('10.00', 'USD'), min: 1 },
+  usage: [{
+    metric: 'tokens.input',
+    included: Quantity.fromBigInt(1_000_000n),
+    price: { kind: 'flat', rate: Rate.fromDecimalString('0.00012') },
+  }],
+  trialDays: 14,
+});
+
+chargeForPeriod(pro, { seats: 3, usage: { 'tokens.input': Quantity.fromBigInt(1_500_000n) } }).total;
+// 49.00 base + 30.00 seats + 0.60 overage = 79.60 USD
+```
+
+`chargeSubscriptionPeriod(db, …)` is the stateful half: it posts the total to
+the ledger as an accrual, records the period, and advances the subscription —
+all idempotent, so a replayed webhook charges once. The base and seat fees
+prorate for a partial period; usage never does. During a trial the base and
+seats are waived and usage is still priced. Capture stays with the provider:
+nothing here credits a balance except a verified payment.
+
+Overage can be **tiered** — `priceTiered(quantity, tiers, 'volume' | 'graduated',
+currency)` — and it rounds in the one place `price` does: the exact total across
+every tier is accumulated first and rounded once, never tier by tier.
 
 ## Database
 

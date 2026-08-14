@@ -499,13 +499,13 @@ describe('billing-kit migrate against the shipped sql/', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /applying {5}001_core\.sql … ok/);
     assert.match(r.stdout, /applying {5}010_metering\.sql … ok/);
-    assert.match(r.stdout, /5 applied\./);
+    assert.match(r.stdout, /6 applied\./);
 
     await inTestDb(async (c) => {
       const rows = (await c.query('SELECT filename FROM billing.schema_migrations ORDER BY filename')).rows;
       assert.deepEqual(rows.map((x) => x.filename), [
         '001_core.sql', '010_metering.sql', '011_partitions.sql',
-        '012_meter_batch.sql', '013_runs.sql',
+        '012_meter_batch.sql', '013_runs.sql', '020_subscriptions.sql',
       ]);
 
       // One ledger_entries, in 001_core's shape. `account` is the column the
@@ -530,7 +530,7 @@ describe('billing-kit migrate against the shipped sql/', () => {
 
     const s = cli(['status', '--database-url', TEST_URL, '--migrations', path.join(REPO, 'sql')]);
     assert.equal(s.status, 0);
-    assert.match(s.stdout, /5 applied, 0 pending/);
+    assert.match(s.stdout, /6 applied, 0 pending/);
   });
 
   it('refuses the metering group without 001_core rather than half-working', async (t) => {

@@ -57,6 +57,14 @@
       "import": "./dist/metering/index.mjs",
       "require": "./dist/metering/index.cjs"
     },
+    "./subscriptions": {
+      "types": {
+        "import": "./dist/subscriptions/index.d.ts",
+        "require": "./dist/subscriptions/index.d.cts"
+      },
+      "import": "./dist/subscriptions/index.mjs",
+      "require": "./dist/subscriptions/index.cjs"
+    },
     "./sql/*": "./sql/*",
     "./package.json": "./package.json"
   },

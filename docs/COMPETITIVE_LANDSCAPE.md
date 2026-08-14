@@ -26,12 +26,12 @@ first-class; **delegated**: handled by the payment provider through the adapter;
 | Multi-currency | partial | **core**, per-currency balances | **our edge** |
 | True-up — estimate vs actual reconciliation | ✅ | **core** — `settlement_variance` | **our edge** |
 | Payment-agnostic (Stripe/Paddle/…) | ✅ many | **core**, Stripe + Paddle; more via adapters repo | — |
-| **Subscriptions / recurring plans** | ✅ first-class | **delegated** to provider | **NOW** |
-| Per-seat pricing | ✅ | **gap** (seats live in components/portal, not core) | **NOW** (with plans) |
-| Free trial / freemium | ✅ | **gap** | **NOW** (with plans) |
-| Proration — partial periods | ✅ | **gap** | **NOW** (with plans) |
-| Tiered pricing — volume / graduated | ✅ | **gap** — `price()` is a single flat rate | **NOW** (plans need it) |
-| Hybrid — flat fee + usage overage | ✅ | **partial** — pieces exist, no plan to bind them | **NOW** (with plans) |
+| **Subscriptions / recurring plans** | ✅ first-class | **core** — `billing-kit/subscriptions` | ✅ **shipped** |
+| Per-seat pricing | ✅ | **core** — plan `seats`, with a minimum | ✅ **shipped** |
+| Free trial / freemium | ✅ | **core** — `trialDays`, waives base + seats | ✅ **shipped** |
+| Proration — partial periods | ✅ | **core** — base + seats prorate, usage never | ✅ **shipped** |
+| Tiered pricing — volume / graduated | ✅ | **core** — `priceTiered`, rounds once | ✅ **shipped** |
+| Hybrid — flat fee + usage overage | ✅ | **core** — a plan binds base + overage | ✅ **shipped** |
 | Coupons / discounts | ✅ | **gap** | soon |
 | Prepaid credits / wallets | ✅ | **gap** — but ledger-native (a liability account) | soon |
 | Credit notes | ✅ | **gap** — but ledger-native (a compensating posting) | soon |
@@ -49,16 +49,24 @@ posting, which the ledger already supports) or deliberately external (tax,
 dunning). The one gap that is neither — and that the common SaaS case actually
 needs — is **subscriptions**.
 
-## The one that matters now: subscriptions / recurring plans
+## The one that mattered: subscriptions / recurring plans — shipped
 
-Today billing-kit delegates subscriptions to the provider (`ensureSubscription`
-on the adapter). That's fine for "let Stripe bill $49/mo" — but it hands the plan
-model back to the provider, which is exactly what billing-kit's thesis says not to
-do for anything you must answer for. A plan that mixes a flat fee, included
-allowances, metered overage and seats is billing *logic*, not a payment; it
-belongs on our side of the `settle` line, posted to our ledger.
+> **Status: built.** Tiered pricing landed in `money.ts` (`priceTiered`) and the
+> `billing-kit/subscriptions` entry point ships plans, seats, included
+> allowances, metered overage, proration and trials — pure pricing plus a
+> ledger-posting `chargeSubscriptionPeriod`. Full unit + adversarial suite green;
+> the charge path is idempotency-tested against Postgres. The rest of this
+> section is the design, kept for the record.
 
-### Recommendation: a `billing-kit/subscriptions` module — not an adapter
+Previously billing-kit delegated subscriptions to the provider
+(`ensureSubscription` on the adapter). That's fine for "let Stripe bill $49/mo" —
+but it hands the plan model back to the provider, which is exactly what
+billing-kit's thesis says not to do for anything you must answer for. A plan that
+mixes a flat fee, included allowances, metered overage and seats is billing
+*logic*, not a payment; it belongs on our side of the `settle` line, posted to
+our ledger.
+
+### What was built: a `billing-kit/subscriptions` module — not an adapter
 
 An adapter is per-provider (Chargebee, Recurly). Subscriptions are
 provider-*independent* billing logic, so they belong in a **new core entry point**,
@@ -103,10 +111,11 @@ This is the smallest change that closes the biggest gap and stays true to the
 
 ## Now / soon / later roadmap
 
-**NOW — the standard-SaaS gap (one coherent piece of work):**
-1. Tiered pricing (volume + graduated) in the pricing engine — prerequisite.
-2. `billing-kit/subscriptions`: plans (flat + seats + included + overage), period
-   scheduler, proration, trials. Posts to the existing ledger; capture delegated.
+**DONE — the standard-SaaS gap (shipped):**
+1. ✅ Tiered pricing (volume + graduated, per-tier flat) in the pricing engine.
+2. ✅ `billing-kit/subscriptions`: plans (flat + seats + included + overage),
+   proration, trials, and an idempotent `chargeSubscriptionPeriod` that posts to
+   the existing ledger; capture stays delegated.
 
 **SOON — high ROI, ledger-native, small surface:**
 3. Coupons / discounts — a pricing modifier applied before rounding.

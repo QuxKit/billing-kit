@@ -65,7 +65,12 @@ const shared: Options = {
 export default defineConfig([
   {
     ...shared,
-    entry: ['src/index.ts', 'src/providers/index.ts', 'src/metering/index.ts'],
+    entry: [
+      'src/index.ts',
+      'src/providers/index.ts',
+      'src/metering/index.ts',
+      'src/subscriptions/index.ts',
+    ],
     format: ['esm', 'cjs'],
     dts: true,
     clean: true,

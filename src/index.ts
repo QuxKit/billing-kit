@@ -28,13 +28,15 @@ export {
   Quantity,
   Rate,
   price,
+  priceTiered,
+  scaleFraction,
   allocate,
   currencyExponent,
   isKnownCurrency,
   knownCurrencies,
   DECIMAL_SCALE,
 } from './money';
-export type { MoneyJSON, PricedAmount } from './money';
+export type { MoneyJSON, PricedAmount, Tier, TierMode } from './money';
 
 export { BillingError } from './errors';
 export type { BillingFailure, BillingErrorCode } from './errors';

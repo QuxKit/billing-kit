@@ -16,6 +16,9 @@ export type BillingFailure =
   | { code: 'invalid_decimal'; value: string; what: string }
   | { code: 'precision_loss'; value: string; scale: number; what: string }
   | { code: 'invalid_allocation'; reason: string }
+  | { code: 'invalid_tiers'; reason: string }
+  | { code: 'invalid_plan'; reason: string }
+  | { code: 'invalid_subscription'; reason: string }
 
   // --- ingest --------------------------------------------------------------
   | { code: 'invalid_event'; field: string; reason: string }
@@ -57,6 +60,12 @@ function describe(failure: BillingFailure): string {
       return `${failure.what} ${failure.value} does not fit ${failure.scale} fractional digits without losing a digit`;
     case 'invalid_allocation':
       return `cannot allocate: ${failure.reason}`;
+    case 'invalid_tiers':
+      return `invalid pricing tiers: ${failure.reason}`;
+    case 'invalid_plan':
+      return `invalid plan: ${failure.reason}`;
+    case 'invalid_subscription':
+      return `invalid subscription: ${failure.reason}`;
     case 'invalid_event':
       return `usage event field ${failure.field} is invalid: ${failure.reason}`;
     case 'idempotency_conflict':
