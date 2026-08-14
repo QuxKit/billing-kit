@@ -63,6 +63,9 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "billing-kit": "./dist/cli.mjs"
+  },
   "files": [
     "dist",
     "sql",
@@ -74,6 +77,7 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "pnpm run test:unit && pnpm run test:adversarial",
+    "pretest:unit": "pnpm run build",
     "test:unit": "tsx --test --test-concurrency=1 test/*.test.ts",
     "test:adversarial": "tsx --test --test-concurrency=1 test/adversarial/*.test.ts",
     "test:pack": "tsx --test scripts/verify-pack.ts",
@@ -81,6 +85,14 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "peerDependencies": {
+    "pg": "^8.11.0"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

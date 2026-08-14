@@ -5,6 +5,18 @@ Prisma cannot express — `PARTITION BY`, composite primary keys that include a
 partition key, BRIN indexes, and the batch function itself (ARCHITECTURE.md
 §6.2).
 
+`npx billing-kit migrate` applies a directory of these in order, once each,
+tracked in `billing.schema_migrations` and checksummed so an already-applied
+file that was edited is refused rather than skipped. It cannot yet be pointed at
+the whole of `sql/`: `001_core.sql` and this file collide on
+`billing.ledger_entries` (see the check at the top of `010_metering.sql`), so
+`migrate` over all five halts after `001` with Postgres's explanation. Until
+that is resolved, the metering group applies on its own from a directory holding
+only these four.
+
+By hand it is one psql per file, in this order, and nothing records that you
+did:
+
 ```
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/010_metering.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/011_partitions.sql

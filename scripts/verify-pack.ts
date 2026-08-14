@@ -282,3 +282,84 @@ export { json, paddle, paddleIsTyped };
 
   run(tsc, ['--project', path.join(dir, 'tsconfig.json')], dir);
 });
+
+/**
+ * The `bin`, run the way npm runs it.
+ *
+ * The check the CLI most needs, and the one nothing else here stands in for.
+ * `exports` governs `import`; `bin` does not go through it at all — npm links
+ * the target and executes it under plain `node`. A CLI that only starts under
+ * `tsx`, or whose entry is not linked, or that is missing its shebang, fails
+ * here and nowhere else.
+ *
+ * `init` runs in the consumer directory, which is `type: module`; then `status`
+ * against a port nothing listens on. Refusing to connect is the expected end.
+ * What is under test is that the program starts, finds its own packaged `sql/`,
+ * reads back the config it just wrote, and exits 1 with a sentence.
+ */
+test('the bin is linked, starts under plain node, and reads back what init wrote', () => {
+  const bin = path.join(consumer, 'node_modules', '.bin', 'billing-kit');
+
+  assert.match(run(bin, ['--version'], consumer), /^billing-kit \d+\.\d+\.\d+/);
+
+  const init = run(bin, ['init'], consumer);
+  // `type: module` here, so a `.js` config is ESM and is the right choice.
+  assert.match(init, /billing\.config\.js\b/);
+  assert.match(readFileSync(path.join(consumer, 'billing.config.js'), 'utf8'), /export default/);
+
+  // Two states, and the first is the one a new adopter is actually in. `pg` is
+  // an OPTIONAL peer, so `npm install billing-kit` does not bring it — this
+  // consumer has no driver, which is exactly the shape of the first `status`
+  // anyone runs.
+  const noDriver = statusAgainstNothing(bin);
+  assert.equal(noDriver.status, 1, `expected a refusal, got:\n${noDriver.stdout}${noDriver.stderr}`);
+  assert.match(noDriver.stderr, /cannot load `pg`/);
+  assert.match(noDriver.stderr, /optional peer dependency/);
+  assert.match(noDriver.stderr, /npm install pg/, 'the refusal has to name the fix');
+  assert.doesNotMatch(
+    noDriver.stderr,
+    /ERR_MODULE_NOT_FOUND|Cannot find package/,
+    'a missing optional peer should be a sentence, not a resolution error',
+  );
+
+  // Then the driver is installed and the same command gets as far as the
+  // network. That is the boundary worth proving: everything before it —
+  // linking, the shebang, config resolution, packaged sql/ — is ours.
+  run('npm', ['install', '--no-audit', '--no-fund', '--loglevel', 'error', 'pg'], consumer);
+
+  const withDriver = statusAgainstNothing(bin);
+  assert.equal(withDriver.status, 1, `expected a refusal, got:\n${withDriver.stdout}${withDriver.stderr}`);
+  assert.match(withDriver.stderr, /cannot connect/, 'the failure should be a sentence, not a stack');
+  assert.doesNotMatch(
+    withDriver.stderr,
+    /Cannot find module|ERR_MODULE_NOT_FOUND|ERR_UNKNOWN_FILE_EXTENSION/,
+  );
+
+  // Not asserted here: that the default migrations directory is the packaged
+  // one. `status` prints that header only after it connects, and this suite has
+  // no database — asserting it would mean either a Postgres dependency in the
+  // packaging check or a weaker assertion dressed up as a strong one. It is
+  // covered where a database already exists: test/cli.test.ts drives the same
+  // resolution against a real server, and the ESM/CJS cases above resolve
+  // `billing-kit/sql/001_core.sql` through the exports map from this install.
+});
+
+/**
+ * `status` against a port nothing listens on.
+ *
+ * Not `run`, because this is expected to exit non-zero and the output is the
+ * assertion; `run` throws away the distinction between a refusal and a crash.
+ */
+function statusAgainstNothing(bin: string): { status: number; stdout: string; stderr: string } {
+  try {
+    const stdout = execFileSync(bin, ['status', '--database-url', 'postgres://127.0.0.1:1/nothing'], {
+      cwd: consumer,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    return { status: 0, stdout, stderr: '' };
+  } catch (error) {
+    const e = error as { status?: number; stdout?: string; stderr?: string };
+    return { status: e.status ?? -1, stdout: e.stdout ?? '', stderr: e.stderr ?? '' };
+  }
+}

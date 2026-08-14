@@ -20,25 +20,26 @@
 // The three entries are listed separately rather than globbed so that the
 // entry points and the `exports` map in package.json fail loudly together: a
 // renamed entry breaks the build instead of silently emitting one fewer file.
-import { defineConfig } from 'tsup';
+//
+// Two configs, not one. The library ships ESM + CJS + declarations because a
+// consumer's module system is theirs to choose; the CLI is run by node and has
+// no consumer, so a CJS copy and a .d.ts of it would be dead weight in the
+// tarball. `clean` therefore belongs to the first config only — set on both,
+// the second would delete what the first just emitted.
+import { defineConfig, type Options } from 'tsup';
 
-export default defineConfig({
-  entry: ['src/index.ts', 'src/providers/index.ts', 'src/metering/index.ts'],
-  format: ['esm', 'cjs'],
-  dts: true,
+const shared: Options = {
   sourcemap: true,
-  clean: true,
 
-  // No bundling across entry points. Each of the three is its own graph, which
-  // is the whole premise of shipping them as separate subpaths: importing
-  // `billing-kit` must not pull the Stripe and Paddle adapters in with it.
+  // No bundling across entry points. Each graph is its own, which is the whole
+  // premise of shipping them as separate subpaths: importing `billing-kit` must
+  // not pull the Stripe and Paddle adapters in with it.
   splitting: false,
   bundle: true,
 
-  // The library has no runtime dependencies; `pg` is a devDependency used only
-  // by the tests. Nothing should be inlined from node_modules — if a bundle
-  // ever grows one, that is a dependency that belongs in `dependencies`.
-  external: [],
+  // The library has no runtime dependencies. `pg` is a peer of the CLI and is
+  // loaded through a dynamic import, so it must stay external in both.
+  external: ['pg'],
   skipNodeModulesBundle: true,
 
   // Matches tsconfig's `target`. Set here too because esbuild does not read it
@@ -59,4 +60,30 @@ export default defineConfig({
   // `.js` mean ESM, so a CJS file must be `.cjs` to be loadable at all; naming
   // both explicitly means the `exports` map never depends on `type` staying put.
   outExtension: ({ format }) => ({ js: format === 'esm' ? '.mjs' : '.cjs' }),
-});
+};
+
+export default defineConfig([
+  {
+    ...shared,
+    entry: ['src/index.ts', 'src/providers/index.ts', 'src/metering/index.ts'],
+    format: ['esm', 'cjs'],
+    dts: true,
+    clean: true,
+  },
+  {
+    ...shared,
+    // dist/cli.mjs, which is what `bin` points at. Named for the command rather
+    // than for the file it is built from, because the path appears in npm's
+    // shim and in every error a user pastes back.
+    entry: { cli: 'cli/bin.ts' },
+    format: ['esm'],
+    dts: false,
+    clean: false,
+
+    // npm sets the executable bit on `bin` targets when it links them, but a
+    // shebang is what makes the file runnable directly — from a checkout, from
+    // a Docker layer that copies dist/, from anything that did not go through
+    // npm's linker.
+    banner: { js: '#!/usr/bin/env node' },
+  },
+]);

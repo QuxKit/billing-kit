@@ -16,5 +16,5 @@
     // every review; `noEmit` is already set, which this flag requires.
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "test", "scripts", "tsup.config.ts"]
+  "include": ["cli", "src", "test", "scripts", "tsup.config.ts"]
 }
