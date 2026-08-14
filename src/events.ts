@@ -126,6 +126,72 @@ async function claimKey(tx: SqlExecutor, event: UsageEvent, eventId: string): Pr
   return row;
 }
 
+/**
+ * Refuse a replay that is not a replay.
+ *
+ * The dedupe key is (tenant, source, subject, metric, external_id) and does not
+ * include the quantity. So a second call under the same key carrying a
+ * different quantity hits the claim, takes the duplicate branch, and is
+ * answered `deduplicated: true` — reporting success for a request the system
+ * never performed, and leaving the first quantity billed. A gateway that
+ * retried with a corrected token count, or one whose retry raced its own
+ * pagination, loses the correction silently. Nothing errors, nothing logs, and
+ * the discrepancy surfaces as an invoice nobody can reconcile.
+ *
+ * The two silent answers are both wrong. Keeping the stored value discards a
+ * correction; overwriting it lets a stale retry clobber one. They cannot be
+ * told apart from here, so neither is chosen: the caller is told, which is what
+ * `idempotency_conflict` in errors.ts has always said this should do — "a bug
+ * in the caller, surfaced rather than answered with a stale response for a
+ * request never made". The code was declared and never raised.
+ *
+ * This is the one place the module's own rule — that a duplicate is success,
+ * never a 409 — is deliberately inverted, and for the reason the rule exists.
+ * A retry is boring because it is *the same request*. A different request under
+ * a used key is not a retry, and a client that treats the failure as fatal is
+ * behaving correctly: it has a bug, and finding out now is the cheap outcome.
+ *
+ * `metadata` is deliberately not compared. It is annotation — a trace id, a
+ * request header — and it legitimately differs between a call and its retry.
+ * Only what determines the bill is compared: the quantity and when it happened.
+ */
+async function assertSameEvent(tx: SqlExecutor, event: UsageEvent, claim: ClaimRow): Promise<void> {
+  const rows = await tx.query<{ quantity: string }>(
+    `SELECT quantity::text AS quantity FROM billing.usage_events WHERE id = $1`,
+    [claim.event_id],
+  );
+
+  const stored = rows[0];
+  if (stored === undefined) {
+    // A claimed key with no event behind it. record() writes both in one
+    // transaction precisely so this cannot happen, so reaching here means the
+    // rows were separated by something outside this module.
+    throw new BillingError({ code: 'not_found', what: 'usage_event for a claimed key', id: claim.event_id });
+  }
+
+  // Compared as quantities, not as strings: the stored numeric round-trips with
+  // whatever scale Postgres chose, so '10' and '10.000' are the same quantity
+  // and only one of them is what was sent. Parsing both to the fixed decimal
+  // scale makes the comparison exact and independent of that formatting.
+  if (Quantity.fromDecimalString(stored.quantity).units !== event.quantity.units) {
+    throw new BillingError({
+      code: 'idempotency_conflict',
+      operation: 'record',
+      key: `${event.source}/${event.externalId}`,
+      detail: `quantity was ${stored.quantity}, this call sent ${event.quantity.toDecimalString()}`,
+    });
+  }
+
+  if (claim.occurred_at.getTime() !== event.occurredAt.getTime()) {
+    throw new BillingError({
+      code: 'idempotency_conflict',
+      operation: 'record',
+      key: `${event.source}/${event.externalId}`,
+      detail: `occurredAt was ${claim.occurred_at.toISOString()}, this call sent ${event.occurredAt.toISOString()}`,
+    });
+  }
+}
+
 async function insertEvent(tx: SqlExecutor, event: UsageEvent, eventId: string): Promise<Date> {
   const rows = await tx.query<{ received_at: Date }>(
     `INSERT INTO billing.usage_events
@@ -169,6 +235,10 @@ export async function record(db: SqlExecutor, event: UsageEvent, now: Date): Pro
     const claim = await claimKey(tx, event, eventId);
 
     if (!claim.inserted) {
+      // Costs one SELECT, on the duplicate path only. Duplicates are rare, and
+      // the alternative is answering "already recorded" without having checked
+      // what was recorded.
+      await assertSameEvent(tx, event, claim);
       return {
         eventId: claim.event_id,
         deduplicated: true,
@@ -278,6 +348,7 @@ export async function recordMany(
 
     const fresh: UsageEvent[] = [];
     const freshIds: string[] = [];
+    const replayed: Array<[UsageEvent, ClaimRow]> = [];
     for (let i = 0; i < unique.length; i++) {
       const row = byOrd.get(i + 1);
       if (row === undefined) {
@@ -291,7 +362,22 @@ export async function recordMany(
       if (row.inserted) {
         fresh.push(unique[i]!);
         freshIds.push(uniqueIds[i]!);
+      } else {
+        replayed.push([unique[i]!, row]);
       }
+    }
+
+    // The batch path has to make the same check as record(), or the check is
+    // not a property of the library — it is a property of which function you
+    // called, and the way to bypass it is to send an array of one.
+    //
+    // Checked before the insert rather than after, so a conflict anywhere in
+    // the batch aborts the whole transaction and nothing lands. A batch that
+    // half-applied and then reported a conflict would leave the caller with no
+    // safe move: retrying re-sends the events that succeeded, and not retrying
+    // drops the ones that did not.
+    for (const [event, claim] of replayed) {
+      await assertSameEvent(tx, event, claim);
     }
 
     if (fresh.length > 0) {

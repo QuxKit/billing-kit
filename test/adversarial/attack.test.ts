@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import pg from 'pg';
 
+import { BillingError } from '../../src/errors';
 import { record, recordMany, queryUsage } from '../../src/events';
 import { post, balance, accrualPosting, paymentPosting, entries } from '../../src/ledger';
 import { Money, Quantity, price, Rate, allocate } from '../../src/money';
@@ -53,21 +54,38 @@ test('A1: two metrics from one request id — the second is silently discarded',
   assert.equal(stored.length, 2, '5000 tokens of billable usage; only 1000 was stored');
 });
 
-test('A2: replay with a DIFFERENT quantity is reported as a duplicate', async () => {
+test('A2: replay with a DIFFERENT quantity is refused, not called a duplicate', async () => {
+  // Was: the second call hit the dedupe key, took the duplicate branch and
+  // returned `deduplicated: true` — success, for a request never performed,
+  // leaving 10 billed where 1,000,000 was sent.
+  //
+  // Now: refused. Keeping the stored value discards a correction and
+  // overwriting it lets a stale retry clobber one; the two cannot be told apart
+  // from inside record(), so neither is chosen and the caller is told.
   const base = {
     tenantId: 't', subjectId: 's2', source: 'gateway', externalId: 'req-A2',
     metric: 'tokens.input', occurredAt: now,
   };
   await record(db, { ...base, quantity: Quantity.fromBigInt(10n) }, now);
-  const second = await record(db, { ...base, quantity: Quantity.fromBigInt(1_000_000n) }, now);
-  console.log('  second call ->', second);
 
+  await assert.rejects(
+    () => record(db, { ...base, quantity: Quantity.fromBigInt(1_000_000n) }, now),
+    (e: unknown) => BillingError.hasCode(e, 'idempotency_conflict'),
+    'a payload change must not be reported as a boring retry',
+  );
+
+  // And the refusal changed nothing: the first quantity is still the only one.
   const stored = await queryUsage(db, {
     tenantId: 't', subjectId: 's2',
     window: { start: new Date(now.getTime() - 86400e3), end: new Date(now.getTime() + 86400e3) },
   });
-  console.log('  stored quantity:', stored[0]?.quantity.toDecimalString());
-  assert.equal(second.deduplicated, false, 'a payload change should not be reported as a boring retry');
+  assert.equal(stored.length, 1);
+  assert.equal(Number(stored[0]!.quantity.toDecimalString()), 10);
+
+  // An identical retry is still boring, which is the contract the refusal must
+  // not have broken.
+  const same = await record(db, { ...base, quantity: Quantity.fromBigInt(10n) }, now);
+  assert.equal(same.deduplicated, true);
 });
 
 test('A3: same external id, DIFFERENT subject — charged to the wrong customer / dropped', async () => {
@@ -82,7 +100,18 @@ test('A3: same external id, DIFFERENT subject — charged to the wrong customer 
   assert.equal(bobRows.length, 1, "bob's usage vanished into alice's dedupe key");
 });
 
-test('A4: ledger replay with different legs silently returns the OLD transaction', async () => {
+test('A4: ledger replay with different legs is refused, not silently discarded', async () => {
+  // Was: the $500.00 posting hit the idempotency key, returned the $5.00
+  // transaction with `deduplicated: true`, and wrote nothing. The caller was
+  // told it succeeded and the $500.00 was gone — no failed row, no error, and a
+  // transaction that looks perfectly well formed. It surfaces later as a
+  // balance that disagrees with the provider's, with nothing to follow back.
+  //
+  // Now: refused. Note what the fix is NOT — the correction is not applied
+  // either. A ledger is append-only; correcting a posted transaction is a
+  // reversing entry and a new posting, both of which stay visible. Overwriting
+  // in place would destroy the audit trail that is the reason to keep a
+  // double-entry ledger at all.
   const p1 = accrualPosting({
     tenantId: 't', subjectId: 's4', chargeId: 'charge-A4',
     amount: Money.fromDecimalString('5.00', 'USD'),
@@ -93,13 +122,23 @@ test('A4: ledger replay with different legs silently returns the OLD transaction
     tenantId: 't', subjectId: 's4', chargeId: 'charge-A4',
     amount: Money.fromDecimalString('500.00', 'USD'),
   });
-  const r2 = await post(db, p2, now);
-  console.log('  replay deduplicated =', r2.deduplicated,
-    'entries =', r2.entries.map((e) => `${e.account}:${e.amount.toDecimalString()}`));
+
+  await assert.rejects(
+    () => post(db, p2, now),
+    (e: unknown) => BillingError.hasCode(e, 'idempotency_conflict'),
+    'a different posting under a used key must not be answered with the old transaction',
+  );
 
   const bal = await balance(db, { tenantId: 't', subjectId: 's4', account: 'customer_balance', currency: 'USD' });
-  console.log('  balance =', bal.toString());
-  assert.equal(bal.toDecimalString(), '500.00', 'the corrected amount was silently discarded');
+  assert.equal(bal.toDecimalString(), '5.00', 'the refusal must not have written anything');
+
+  // The identical replay stays boring — the retry contract is intact.
+  const again = await post(db, accrualPosting({
+    tenantId: 't', subjectId: 's4', chargeId: 'charge-A4',
+    amount: Money.fromDecimalString('5.00', 'USD'),
+  }), now);
+  assert.equal(again.deduplicated, true);
+  assert.equal(again.entries.length, p1.legs.length);
 });
 
 test('A5: a late payment webhook cannot be posted — no partition, no default', async () => {
