@@ -92,7 +92,7 @@
     "prepublishOnly": "pnpm run build && pnpm test && pnpm run typecheck && pnpm run test:pack"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "restricted"
   },
   "peerDependencies": {
     "pg": "^8.11.0"
