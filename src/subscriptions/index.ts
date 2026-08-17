@@ -34,6 +34,7 @@ export type {
   PeriodCharge,
   PeriodChargeInput,
   Plan,
+  PlanFeature,
   PlanSeats,
   PlanUsage,
   Subscription,

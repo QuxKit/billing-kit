@@ -37,6 +37,30 @@ export interface PlanUsage {
   price: UsagePrice;
 }
 
+/**
+ * What a plan entitles a subscriber to, beyond the usage it prices.
+ *
+ * `true` is a boolean gate: the plan has it or it does not (`sso`,
+ * `audit_log`). A metered feature is an allowance per period over a metric —
+ * `{ limit: 100, meter: 'exports' }` — checked against `aggregateUsage` for the
+ * current period. What happens past the limit is `overage`:
+ *
+ *   'deny'      refuse. The default when the plan does not price the meter.
+ *   'postpaid'  allow; the overage is priced by the plan's `usage` component
+ *               for the same metric. The default when it does.
+ *   'wallet'    allow while the subject's prepaid wallet holds a positive
+ *               balance; refuse when it is empty.
+ */
+export type PlanFeature =
+  | true
+  | {
+      limit: Quantity;
+      meter: string;
+      /** How the meter's events are collapsed. Default `sum`. */
+      method?: 'sum' | 'count' | 'max';
+      overage?: 'deny' | 'postpaid' | 'wallet';
+    };
+
 export interface PlanSeats {
   /** Price per seat per period. */
   unit: Money;
@@ -59,6 +83,8 @@ export interface Plan {
   flat: Money;
   seats?: PlanSeats;
   usage: readonly PlanUsage[];
+  /** Feature gates and per-period allowances. See `PlanFeature`. */
+  features?: Readonly<Record<string, PlanFeature>>;
   /** Free days at the start; the period a subscription begins in charges no
    *  base or seat fee. Usage in that period is still priced. Omit for none. */
   trialDays?: number;

@@ -64,6 +64,14 @@
       "import": "./dist/subscriptions/index.mjs",
       "require": "./dist/subscriptions/index.cjs"
     },
+    "./entitlements": {
+      "types": {
+        "import": "./dist/entitlements/index.d.ts",
+        "require": "./dist/entitlements/index.d.cts"
+      },
+      "import": "./dist/entitlements/index.mjs",
+      "require": "./dist/entitlements/index.cjs"
+    },
     "./invoices": {
       "types": {
         "import": "./dist/invoices/index.d.ts",

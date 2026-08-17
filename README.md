@@ -95,6 +95,7 @@ system*. Everything below is how it earns the word "correct."
 | Provider adapters — Stripe, Paddle | `billing-kit/providers` | ✅ implemented, tested |
 | Webhook → ledger (`applyVerifiedEvent`, replay guard) | `billing-kit/providers` | ✅ implemented, tested |
 | Invoices — numbering, state machine, JSON/HTML render | `billing-kit/invoices` | ✅ implemented, tested (no PDF) |
+| Entitlements — feature gates, metered allowances, overage rules | `billing-kit/entitlements` | ✅ implemented, tested |
 
 Metering, subscriptions and providers are **separate entry points**, not
 re-exports from the root, so an application using one does not compile the
@@ -489,6 +490,49 @@ worker holds is reported under `locked` rather than charged twice, and a charge
 that fails is **retried with backoff** (`retry: { retries, backoffMs }`, default
 two retries from 100 ms) before it lands in `errors` with its `attempts` count —
 and its row stays due for the next fire.
+
+## Entitlements
+
+`@quxkit/billing-kit/entitlements` answers "may this subject do X right now?"
+from things that already exist — no entitlements table to keep in step. A plan
+declares `features`; `check` reads the active subscription, its plan, this
+period's usage (`aggregateUsage`) and, for wallet overage, the wallet.
+
+```ts
+const team = definePlan({
+  id: 'team', currency: 'USD', interval: 'month', flat: usd('49.00'),
+  usage: [{ metric: 'requests', price: { kind: 'flat', rate: Rate.fromDecimalString('0.1') } }],
+  features: {
+    sso: true,                                              // boolean gate
+    api: { limit: q(100_000n), meter: 'requests' },         // priced by the plan -> postpaid overage
+    exports: { limit: q(20n), meter: 'exports' },           // not priced -> deny past the limit
+    renders: { limit: q(5n), meter: 'renders', overage: 'wallet' },   // allowed while the wallet is positive
+    peak: { limit: q(50n), meter: 'concurrency', method: 'max' },
+  },
+});
+
+import { createEntitlements } from '@quxkit/billing-kit/entitlements';
+const entitlements = createEntitlements({ db, plan: (id) => catalogue[id] });
+
+await entitlements.check({ tenantId: 'acme', subjectId: 'ada', feature: 'exports' });
+// { feature: 'exports', allowed: true, kind: 'metered', limit, used, remaining, period, subscriptionId, planId }
+// { allowed: false, reason: 'limit_reached' | 'wallet_empty' | 'no_subscription' | 'not_in_plan' | 'unknown_plan' }
+// { allowed: true, overage: true }            <- past the limit, covered postpaid or by the wallet
+await entitlements.list({ tenantId: 'acme', subjectId: 'ada' });   // every feature of the plan
+```
+
+```
+ metered feature past its limit    overage        answer
+ --------------------------------  -------------  ---------------------------------
+ plan prices the meter             postpaid       allowed, overage: true  (default)
+ plan does not price the meter     deny           allowed: false, limit_reached  (default)
+ overage: 'wallet'                 wallet         allowed while walletBalance > 0, else wallet_empty
+```
+
+The period is the one that contains `at`: if the sweep is late and the
+subscription row has not advanced, the window is stepped forward by the plan
+interval so last period's usage never counts against this one. `definePlan`
+refuses `overage: 'postpaid'` on a meter the plan does not price.
 
 ## Discounts, credit notes and wallets
 

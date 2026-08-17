@@ -589,7 +589,16 @@ a rollback releases the number with it. The state machine is
 resolves the subject from it when no resolver answers and moves the invoice to
 `paid` in the same transaction as the cash posting.
 
-### 4.8 What replay actually means
+### 4.8 Entitlements
+
+Derived, never stored. `billing-kit/entitlements` answers `check(subject,
+feature)` from the active subscription, its plan's `features`, this period's
+`aggregateUsage` and (for `overage: 'wallet'`) the wallet balance. A table would
+be a copy of those four that goes stale the first time a sweep advances a period
+without touching it. The period measured is the one containing `at`, stepped
+forward from the subscription's current period when the sweep is late.
+
+### 4.9 What replay actually means
 
 Given `usage_events` and `price_versions`, the contents of `usage_aggregates`
 and `charges` for any **open** window are a pure function. You may delete and

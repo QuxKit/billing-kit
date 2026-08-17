@@ -7,6 +7,14 @@ All notable changes to `@quxkit/billing-kit` are recorded here. The format is
 ## [Unreleased]
 
 ### Added
+- `@quxkit/billing-kit/entitlements`: `definePlan` gains
+  `features: { [key]: true | { limit, meter, method?, overage? } }`;
+  `check(db, { tenantId, subjectId, feature, plan, at? })` →
+  `{ allowed, kind: 'boolean' | 'metered', limit?, used?, remaining?, overage?,
+  reason? }` from the active subscription's plan, `aggregateUsage` over the
+  period containing `at`, and the wallet for `overage: 'wallet'`;
+  `list(...)`; `createEntitlements` binding; `activeSubscription`,
+  `periodContaining` exported.
 - `@quxkit/billing-kit/invoices` (`sql/031_invoices.sql`): `invoices`,
   `invoice_lines`, `invoice_counters`; `createInvoice`/`addLine`/`finalize`/
   `markPaid`/`voidInvoice`/`markUncollectible`/`attachSettlement`/`getInvoice`/

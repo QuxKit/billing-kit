@@ -50,9 +50,26 @@ export function definePlan(input: Plan): Plan {
     bad('trialDays must be a non-negative integer');
   }
 
+  for (const [key, feature] of Object.entries(input.features ?? {})) {
+    if (!key) bad('a feature has an empty key');
+    if (feature === true) continue;
+    if (!feature.meter) bad(`feature ${key} has an empty meter`);
+    if (feature.limit.isNegative()) bad(`feature ${key} has a negative limit`);
+    if (feature.method !== undefined && !['sum', 'count', 'max'].includes(feature.method)) {
+      bad(`feature ${key} has unknown method ${feature.method}`);
+    }
+    if (feature.overage !== undefined && !['deny', 'postpaid', 'wallet'].includes(feature.overage)) {
+      bad(`feature ${key} has unknown overage ${feature.overage}`);
+    }
+    if (feature.overage === 'postpaid' && !seen.has(feature.meter)) {
+      bad(`feature ${key} allows postpaid overage but the plan does not price ${feature.meter}`);
+    }
+  }
+
   return Object.freeze({
     ...input,
     usage: Object.freeze([...input.usage]),
+    ...(input.features === undefined ? {} : { features: Object.freeze({ ...input.features }) }),
   });
 }
 
