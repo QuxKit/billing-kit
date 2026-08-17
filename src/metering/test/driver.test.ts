@@ -8,14 +8,14 @@
 // the defect in the reference implementation, and it is only testable by making
 // a batch actually fail.
 
-import { before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-
-import { createHarness } from './harness.ts';
-import { createPsqlExecutor, type PsqlExecutor } from './psql-executor.ts';
+import { before, describe, it } from 'node:test';
 import { drain, ensurePartitions, health, partitionReport } from '../driver.ts';
+import { createHarness, SKIP_REASON } from './harness.ts';
+import { createPsqlExecutor, type PsqlExecutor } from './psql-executor.ts';
 
 const h = createHarness('driver');
+const available = await h.available();
 const { createDatabase, psql, reset, scalar, seed } = h;
 const TEST_DB = h.database;
 
@@ -28,7 +28,7 @@ const withDb = async <T>(fn: (db: PsqlExecutor) => Promise<T>): Promise<T> => {
   }
 };
 
-describe('metering driver', () => {
+describe('metering driver', { skip: available ? false : SKIP_REASON }, () => {
   before(async () => {
     await createDatabase();
   });
@@ -165,9 +165,7 @@ describe('metering driver', () => {
 
     // The dead row is left as 'running' rather than rewritten as failed: this
     // path observed a silence, not a failure, and health() is what reports it.
-    const stuck = await scalar(
-      `SELECT status FROM billing.meter_runs WHERE runner = 'dead-worker'`,
-    );
+    const stuck = await scalar(`SELECT status FROM billing.meter_runs WHERE runner = 'dead-worker'`);
     assert.equal(stuck, 'running');
 
     const report2 = await withDb((db) => health(db));
@@ -182,9 +180,7 @@ describe('metering driver', () => {
     await reset();
     await seed({ items: 12, subjects: 3, minutesStale: 5, ratePerMinute: '1.0', fundMinor: '1000000' });
 
-    const report = await withDb((db) =>
-      drain({ db, batch: 3, maxIterations: 2, runner: 'test-bounded' }),
-    );
+    const report = await withDb((db) => drain({ db, batch: 3, maxIterations: 2, runner: 'test-bounded' }));
 
     assert.equal(report.status, 'bounded');
     assert.equal(report.iterations, 2);
@@ -248,7 +244,10 @@ describe('metering driver', () => {
     const rows = await withDb((db) => partitionReport(db));
     const charges = rows.filter((r) => r.parent === 'charges');
     assert.ok(charges.length >= 5, `expected several charge partitions, got ${charges.length}`);
-    assert.ok(charges.some((r) => r.isDefault), 'a DEFAULT partition must exist as the catch-up backstop');
+    assert.ok(
+      charges.some((r) => r.isDefault),
+      'a DEFAULT partition must exist as the catch-up backstop',
+    );
 
     // The §6.2 check: the table must actually be partitioned, not the plain
     // table `prisma db push` leaves behind.
@@ -265,9 +264,7 @@ describe('metering driver', () => {
     // the backstop working; it is also a fault, because the next partition
     // creation now has to scan it under an exclusive lock.
     await seed({ items: 1, subjects: 1, minutesStale: 5, ratePerMinute: '1.0', fundMinor: '100000' });
-    await psql(
-      `UPDATE billing.billable_items SET last_billed_at = now() - interval '5 years'`,
-    );
+    await psql(`UPDATE billing.billable_items SET last_billed_at = now() - interval '5 years'`);
     // One iteration only. A 5-year-old item has ~2.6 million minutes to settle
     // and would otherwise chunk its way forward for the whole deadline; one
     // batch is all this test needs and it keeps the assertion exact.

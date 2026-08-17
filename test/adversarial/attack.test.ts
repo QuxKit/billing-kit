@@ -23,9 +23,9 @@ import test from 'node:test';
 import pg from 'pg';
 
 import { BillingError } from '../../src/errors';
-import { record, recordMany, queryUsage } from '../../src/events';
-import { post, balance, accrualPosting, paymentPosting, entries } from '../../src/ledger';
-import { Money, Quantity, price, Rate, allocate } from '../../src/money';
+import { queryUsage, record } from '../../src/events';
+import { accrualPosting, balance, entries, paymentPosting, post } from '../../src/ledger';
+import { allocate, Money, price, Quantity, Rate } from '../../src/money';
 import { fromPool } from '../pg-executor';
 
 // Not `URL`: that name shadows the global URL constructor used below.
@@ -45,7 +45,10 @@ test.after(() => pool.end());
 
 test('A1: two metrics from one request id — the second is silently discarded', async () => {
   const base = {
-    tenantId: 't', subjectId: 's1', source: 'gateway', externalId: 'req-A1',
+    tenantId: 't',
+    subjectId: 's1',
+    source: 'gateway',
+    externalId: 'req-A1',
     occurredAt: now,
   };
   const inTok = await record(db, { ...base, metric: 'tokens.input', quantity: Quantity.fromBigInt(1000n) }, now);
@@ -55,10 +58,14 @@ test('A1: two metrics from one request id — the second is silently discarded',
   console.log('  output ->', outTok);
 
   const stored = await queryUsage(db, {
-    tenantId: 't', subjectId: 's1',
+    tenantId: 't',
+    subjectId: 's1',
     window: { start: new Date(now.getTime() - 86400e3), end: new Date(now.getTime() + 86400e3) },
   });
-  console.log('  stored rows:', stored.map((s) => `${s.metric}=${s.quantity.toDecimalString()}`));
+  console.log(
+    '  stored rows:',
+    stored.map((s) => `${s.metric}=${s.quantity.toDecimalString()}`),
+  );
   assert.equal(stored.length, 2, '5000 tokens of billable usage; only 1000 was stored');
 });
 
@@ -71,8 +78,12 @@ test('A2: replay with a DIFFERENT quantity is refused, not called a duplicate', 
   // overwriting it lets a stale retry clobber one; the two cannot be told apart
   // from inside record(), so neither is chosen and the caller is told.
   const base = {
-    tenantId: 't', subjectId: 's2', source: 'gateway', externalId: 'req-A2',
-    metric: 'tokens.input', occurredAt: now,
+    tenantId: 't',
+    subjectId: 's2',
+    source: 'gateway',
+    externalId: 'req-A2',
+    metric: 'tokens.input',
+    occurredAt: now,
   };
   await record(db, { ...base, quantity: Quantity.fromBigInt(10n) }, now);
 
@@ -84,11 +95,12 @@ test('A2: replay with a DIFFERENT quantity is refused, not called a duplicate', 
 
   // And the refusal changed nothing: the first quantity is still the only one.
   const stored = await queryUsage(db, {
-    tenantId: 't', subjectId: 's2',
+    tenantId: 't',
+    subjectId: 's2',
     window: { start: new Date(now.getTime() - 86400e3), end: new Date(now.getTime() + 86400e3) },
   });
   assert.equal(stored.length, 1);
-  assert.equal(Number(stored[0]!.quantity.toDecimalString()), 10);
+  assert.equal(Number(stored[0].quantity.toDecimalString()), 10);
 
   // An identical retry is still boring, which is the contract the refusal must
   // not have broken.
@@ -102,7 +114,8 @@ test('A3: same external id, DIFFERENT subject — charged to the wrong customer 
   const bob = await record(db, { ...base, subjectId: 'bob', quantity: Quantity.fromBigInt(999n) }, now);
   console.log('  bob ->', bob);
   const bobRows = await queryUsage(db, {
-    tenantId: 't', subjectId: 'bob',
+    tenantId: 't',
+    subjectId: 'bob',
     window: { start: new Date(now.getTime() - 86400e3), end: new Date(now.getTime() + 86400e3) },
   });
   assert.equal(bobRows.length, 1, "bob's usage vanished into alice's dedupe key");
@@ -121,13 +134,17 @@ test('A4: ledger replay with different legs is refused, not silently discarded',
   // in place would destroy the audit trail that is the reason to keep a
   // double-entry ledger at all.
   const p1 = accrualPosting({
-    tenantId: 't', subjectId: 's4', chargeId: 'charge-A4',
+    tenantId: 't',
+    subjectId: 's4',
+    chargeId: 'charge-A4',
     amount: Money.fromDecimalString('5.00', 'USD'),
   });
   await post(db, p1, now);
 
   const p2 = accrualPosting({
-    tenantId: 't', subjectId: 's4', chargeId: 'charge-A4',
+    tenantId: 't',
+    subjectId: 's4',
+    chargeId: 'charge-A4',
     amount: Money.fromDecimalString('500.00', 'USD'),
   });
 
@@ -141,10 +158,16 @@ test('A4: ledger replay with different legs is refused, not silently discarded',
   assert.equal(bal.toDecimalString(), '5.00', 'the refusal must not have written anything');
 
   // The identical replay stays boring — the retry contract is intact.
-  const again = await post(db, accrualPosting({
-    tenantId: 't', subjectId: 's4', chargeId: 'charge-A4',
-    amount: Money.fromDecimalString('5.00', 'USD'),
-  }), now);
+  const again = await post(
+    db,
+    accrualPosting({
+      tenantId: 't',
+      subjectId: 's4',
+      chargeId: 'charge-A4',
+      amount: Money.fromDecimalString('5.00', 'USD'),
+    }),
+    now,
+  );
   assert.equal(again.deduplicated, true);
   assert.equal(again.entries.length, p1.legs.length);
 });
@@ -165,11 +188,17 @@ test('A5: a late payment webhook posts into the default partition', async () => 
   // threw, because a posting that vanished would also not throw.
   const old = new Date(now.getTime() - 120 * 24 * 3600e3); // 4 months ago
   const p = paymentPosting({
-    tenantId: 't', subjectId: 's5', paymentId: 'pay-A5',
-    amount: Money.fromDecimalString('100.00', 'USD'), occurredAt: old,
+    tenantId: 't',
+    subjectId: 's5',
+    paymentId: 'pay-A5',
+    amount: Money.fromDecimalString('100.00', 'USD'),
+    occurredAt: old,
   });
   const posted = await post(db, p, now);
-  console.log('  posted ->', posted.entries.map((e) => `${e.account}:${e.amount.toDecimalString()}`));
+  console.log(
+    '  posted ->',
+    posted.entries.map((e) => `${e.account}:${e.amount.toDecimalString()}`),
+  );
 
   assert.equal(posted.deduplicated, false);
   assert.equal(posted.entries.length, 2);
@@ -177,11 +206,11 @@ test('A5: a late payment webhook posts into the default partition', async () => 
   // Readable back through the normal query path, in the right account, for the
   // right subject, at the timestamp the provider gave us.
   const read = await entries(db, { tenantId: 't', subjectId: 's5' });
-  assert.deepEqual(
-    read.map((e) => `${e.account}:${e.amount.toDecimalString()}`).sort(),
-    ['cash:100.00', 'customer_balance:-100.00'],
-  );
-  assert.equal(read[0]!.postedAt.getTime(), old.getTime(), 'posted at the provider timestamp, not at arrival');
+  assert.deepEqual(read.map((e) => `${e.account}:${e.amount.toDecimalString()}`).sort(), [
+    'cash:100.00',
+    'customer_balance:-100.00',
+  ]);
+  assert.equal(read[0].postedAt.getTime(), old.getTime(), 'posted at the provider timestamp, not at arrival');
 
   const cash = await balance(db, { tenantId: 't', subjectId: 's5', account: 'cash', currency: 'USD' });
   assert.equal(cash.toDecimalString(), '100.00');
@@ -189,26 +218,42 @@ test('A5: a late payment webhook posts into the default partition', async () => 
   // And it really did go to the default partition, which is what makes this a
   // test of the backstop rather than of a lucky month boundary.
   const { rows } = await pool.query<{ n: string }>(
-    "SELECT count(*)::text AS n FROM billing.ledger_entries_default WHERE source_id = 'pay-A5'");
-  assert.equal(rows[0]!.n, '2', 'the late payment belongs in the DEFAULT partition');
+    "SELECT count(*)::text AS n FROM billing.ledger_entries_default WHERE source_id = 'pay-A5'",
+  );
+  assert.equal(rows[0].n, '2', 'the late payment belongs in the DEFAULT partition');
 });
 
 test('A6: entries() silently truncates at 500 — a re-derived balance is short', async () => {
   for (let i = 0; i < 600; i++) {
-    await post(db, accrualPosting({
-      tenantId: 't', subjectId: 's6', chargeId: `c-A6-${i}`,
-      amount: Money.fromDecimalString('0.01', 'USD'),
-    }), now);
+    await post(
+      db,
+      accrualPosting({
+        tenantId: 't',
+        subjectId: 's6',
+        chargeId: `c-A6-${i}`,
+        amount: Money.fromDecimalString('0.01', 'USD'),
+      }),
+      now,
+    );
   }
   const rows = await entries(db, { tenantId: 't', subjectId: 's6', account: 'customer_balance' });
-  const derived = Money.sum(rows.map((r) => r.amount), 'USD');
+  const derived = Money.sum(
+    rows.map((r) => r.amount),
+    'USD',
+  );
   const authoritative = await balance(db, {
-    tenantId: 't', subjectId: 's6', account: 'customer_balance', currency: 'USD',
+    tenantId: 't',
+    subjectId: 's6',
+    account: 'customer_balance',
+    currency: 'USD',
   });
   console.log(`  entries() returned ${rows.length} rows -> ${derived.toString()}`);
   console.log(`  balance()                            -> ${authoritative.toString()}`);
-  assert.equal(derived.toDecimalString(), authoritative.toDecimalString(),
-    'entries() truncated with no signal, so the derived total is wrong');
+  assert.equal(
+    derived.toDecimalString(),
+    authoritative.toDecimalString(),
+    'entries() truncated with no signal, so the derived total is wrong',
+  );
 });
 
 test('A7: the two layers agree on what a rate literal means', async () => {
@@ -218,20 +263,28 @@ test('A7: the two layers agree on what a rate literal means', async () => {
   // (round(quantity * rate)) produces. Before the fix these disagreed by
   // 10^exponent: money.ts read the rate as dollars and priced it 100x high.
   const p = price(Quantity.fromBigInt(1n), Rate.fromDecimalString('0.0019'), 'USD');
-  const { rows } = await pool.query<{ v: string }>(
-    "SELECT (1 * 0.0019::numeric)::text AS v");
-  console.log('  money.ts exactMinor =', p.exactMinor, '| sql =', rows[0]!.v);
+  const { rows } = await pool.query<{ v: string }>('SELECT (1 * 0.0019::numeric)::text AS v');
+  console.log('  money.ts exactMinor =', p.exactMinor, '| sql =', rows[0].v);
   // Compared by value, not by string: exactMinor is zero-padded to full scale,
   // and the invariant under test is that the two layers price a rate the same,
   // not that they format a decimal the same.
-  assert.equal(Number(p.exactMinor), Number(rows[0]!.v),
-    'the same rate literal must mean the same price in both layers');
+  assert.equal(
+    Number(p.exactMinor),
+    Number(rows[0].v),
+    'the same rate literal must mean the same price in both layers',
+  );
 });
 
 test('A8: allocate() gives the leftover to the largest remainder', async () => {
   const out = allocate(Money.fromMinor(10n, 'USD'), [1n, 1n, 97n]);
-  console.log('  allocate 10 over weights [1,1,97] ->', out.map((m) => m.minor.toString()));
+  console.log(
+    '  allocate 10 over weights [1,1,97] ->',
+    out.map((m) => m.minor.toString()),
+  );
   // largest remainder: floors are 0,0,9; remainders .1,.1,9.7 -> the leftover
   // penny belongs to the largest remainder (the 97 share).
-  assert.deepEqual(out.map((m) => m.minor), [0n, 0n, 10n]);
+  assert.deepEqual(
+    out.map((m) => m.minor),
+    [0n, 0n, 10n],
+  );
 });

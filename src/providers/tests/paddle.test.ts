@@ -16,13 +16,7 @@ import { Money } from '../../money';
 import { createPaddleProvider } from '../paddle';
 import { providerIdFromOurRecords } from '../types';
 import { expectProviderError } from './fixtures/expect';
-import {
-  createHttpFixture,
-  FixtureNetworkFailure,
-  noJitter,
-  noSleep,
-  respond,
-} from './fixtures/http';
+import { createHttpFixture, FixtureNetworkFailure, noJitter, noSleep, respond } from './fixtures/http';
 import * as fx from './fixtures/paddle';
 
 const CUSTOMER = providerIdFromOurRecords<'customer'>('ctm_TEST1');
@@ -54,10 +48,10 @@ describe('paddle: settlement is quantity-only', () => {
     });
 
     const body = fixture.callsTo('POST', '/transactions')[0]?.body as Record<string, unknown>;
-    assert.deepEqual(body['items'], [{ price_id: 'pri_TEST_TOKENS', quantity: 1000 }]);
-    assert.equal(body['customer_id'], 'ctm_TEST1');
-    assert.deepEqual(body['custom_data'], { billing_kit_settlement: 'settle:subject-1:2026-07' });
-    assert.deepEqual(body['billing_period'], {
+    assert.deepEqual(body.items, [{ price_id: 'pri_TEST_TOKENS', quantity: 1000 }]);
+    assert.equal(body.customer_id, 'ctm_TEST1');
+    assert.deepEqual(body.custom_data, { billing_kit_settlement: 'settle:subject-1:2026-07' });
+    assert.deepEqual(body.billing_period, {
       starts_at: '2026-07-01T00:00:00.000Z',
       ends_at: '2026-08-01T00:00:00.000Z',
     });
@@ -166,10 +160,7 @@ describe('paddle: no request idempotency key', () => {
     // permanently fatal, which is a state a subject never leaves.
     const fixture = createHttpFixture({
       routes: {
-        'POST /customers': respond(
-          { error: { code: 'customer_already_exists', detail: 'email in use' } },
-          409,
-        ),
+        'POST /customers': respond({ error: { code: 'customer_already_exists', detail: 'email in use' } }, 409),
         'GET /customers': respond(fx.wrapList([fx.customer()])),
       },
     });
@@ -222,8 +213,8 @@ describe('paddle: refunds are requests', () => {
     });
     assert.equal(ack.status, 'pending');
     const body = fixture.callsTo('POST', '/adjustments')[0]?.body as Record<string, unknown>;
-    assert.equal(body['type'], 'full');
-    assert.equal(body['action'], 'refund');
+    assert.equal(body.type, 'full');
+    assert.equal(body.action, 'refund');
   });
 
   it('allocates a partial refund to the single line it can', async () => {
@@ -240,7 +231,7 @@ describe('paddle: refunds are requests', () => {
     });
     assert.equal(ack.status, 'settled');
     const body = fixture.callsTo('POST', '/adjustments')[0]?.body as Record<string, unknown>;
-    assert.deepEqual(body['items'], [{ item_id: 'txnitm_TEST1', type: 'partial', amount: '500' }]);
+    assert.deepEqual(body.items, [{ item_id: 'txnitm_TEST1', type: 'partial', amount: '500' }]);
   });
 
   it('refuses a partial refund it would have to invent an allocation for', async () => {
@@ -287,7 +278,7 @@ describe('paddle: recovery without a searchable key', () => {
     });
     assert.equal(found?.ref, 'txn_TEST1');
     const call = fixture.callsTo('GET', '/transactions')[0];
-    assert.equal(call?.query['customer_id'], 'ctm_TEST1');
+    assert.equal(call?.query.customer_id, 'ctm_TEST1');
     assert.equal(call?.query['created_at[GTE]'], '2026-07-01T00:00:00.000Z');
   });
 
@@ -320,10 +311,7 @@ describe('paddle: webhook normalisation', () => {
 
   it('reads string minor units without going through a float', async () => {
     const event = await verify(
-      fx.event(
-        'transaction.billed',
-        fx.withTotals(fx.transaction(), { subtotal: '4199', tax: '400', total: '4599' }),
-      ),
+      fx.event('transaction.billed', fx.withTotals(fx.transaction(), { subtotal: '4199', tax: '400', total: '4599' })),
     );
     assert.equal(event.kind, 'settlement.finalized');
     if (event.kind !== 'settlement.finalized') return;
@@ -364,9 +352,7 @@ describe('paddle: webhook normalisation', () => {
   });
 
   it('maps an approved refund to a settled one, with its transaction', async () => {
-    const event = await verify(
-      fx.event('adjustment.updated', fx.adjustment({ status: 'approved' })),
-    );
+    const event = await verify(fx.event('adjustment.updated', fx.adjustment({ status: 'approved' })));
     assert.equal(event.kind, 'refund.settled');
     if (event.kind !== 'refund.settled') return;
     assert.equal(event.amount.minor, 4599n);
@@ -374,16 +360,12 @@ describe('paddle: webhook normalisation', () => {
   });
 
   it('maps a rejected refund to declined', async () => {
-    const event = await verify(
-      fx.event('adjustment.updated', fx.adjustment({ status: 'rejected' })),
-    );
+    const event = await verify(fx.event('adjustment.updated', fx.adjustment({ status: 'rejected' })));
     assert.equal(event.kind, 'refund.declined');
   });
 
   it('does not treat a credit adjustment as a refund', async () => {
-    const event = await verify(
-      fx.event('adjustment.updated', fx.adjustment({ action: 'credit', status: 'approved' })),
-    );
+    const event = await verify(fx.event('adjustment.updated', fx.adjustment({ action: 'credit', status: 'approved' })));
     assert.equal(event.kind, 'unknown');
   });
 });
@@ -399,7 +381,7 @@ describe('paddle: subscriptions', () => {
     );
     assert.equal(result.status, 'canceled');
     const body = fixture.callsTo('POST', '/subscriptions/:id/cancel')[0]?.body as Record<string, unknown>;
-    assert.equal(body['effective_from'], 'next_billing_period');
+    assert.equal(body.effective_from, 'next_billing_period');
   });
 
   it('resolves our metric from the price custom_data', async () => {

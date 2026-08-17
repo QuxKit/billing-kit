@@ -70,8 +70,7 @@ export type PlanEntry =
  * `core.autocrlf=true` will report every migration as changed — correctly, and
  * with a message that says which files and what to do about it.
  */
-export const checksum = (bytes: Buffer): string =>
-  `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+export const checksum = (bytes: Buffer): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 
 /**
  * Every `.sql` file in `dir`, in byte order of the filename.
@@ -171,10 +170,11 @@ export async function applyMigration(db: SqlExecutor, file: MigrationFile): Prom
   const started = Date.now();
   await db.transaction(async (tx) => {
     await tx.query(file.sql);
-    await tx.query(
-      `INSERT INTO ${TABLE} (filename, checksum, duration_ms) VALUES ($1, $2, $3)`,
-      [file.filename, file.checksum, Date.now() - started],
-    );
+    await tx.query(`INSERT INTO ${TABLE} (filename, checksum, duration_ms) VALUES ($1, $2, $3)`, [
+      file.filename,
+      file.checksum,
+      Date.now() - started,
+    ]);
   });
   return Date.now() - started;
 }

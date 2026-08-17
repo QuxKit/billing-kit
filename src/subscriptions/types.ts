@@ -27,9 +27,7 @@ export type BillingInterval = 'day' | 'week' | 'month' | 'year';
  * `Tier`s — the same primitives as `priceTiered`, so a plan's overage rounds in
  * exactly the one place the rest of the library rounds.
  */
-export type UsagePrice =
-  | { kind: 'flat'; rate: Rate }
-  | { kind: 'tiered'; mode: TierMode; tiers: readonly Tier[] };
+export type UsagePrice = { kind: 'flat'; rate: Rate } | { kind: 'tiered'; mode: TierMode; tiers: readonly Tier[] };
 
 export interface PlanUsage {
   /** The metric this prices — matches a metering `metric` (`tokens.input`). */

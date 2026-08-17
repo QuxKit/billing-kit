@@ -17,7 +17,7 @@
 // esbuild resolves both forms and rewrites them to the real emitted file, so
 // the two styles can coexist in src/ without anyone having to relitigate them.
 //
-// The three entries are listed separately rather than globbed so that the
+// The entries are listed separately rather than globbed so that the
 // entry points and the `exports` map in package.json fail loudly together: a
 // renamed entry breaks the build instead of silently emitting one fewer file.
 //
@@ -37,8 +37,9 @@ const shared: Options = {
   splitting: false,
   bundle: true,
 
-  // The library has no runtime dependencies. `pg` is a peer of the CLI and is
-  // loaded through a dynamic import, so it must stay external in both.
+  // The library has no runtime dependencies. `pg` is an optional peer: the CLI
+  // loads it through a dynamic import and `src/pg.ts` takes a pool in, so it
+  // must stay external in every entry.
   external: ['pg'],
   skipNodeModulesBundle: true,
 
@@ -70,6 +71,7 @@ export default defineConfig([
       'src/providers/index.ts',
       'src/metering/index.ts',
       'src/subscriptions/index.ts',
+      'src/pg.ts',
     ],
     format: ['esm', 'cjs'],
     dts: true,

@@ -52,7 +52,7 @@ import type {
   SubscriptionStatus,
   VerifiedEvent,
 } from '../types';
-import { invoiceTax, normaliseStripeEvent, object, str, STRIPE } from './events';
+import { invoiceTax, normaliseStripeEvent, object, STRIPE, str } from './events';
 
 export const STRIPE_CAPABILITIES = {
   settlement: ['lines', 'quantity'],
@@ -142,9 +142,7 @@ const subscriptionStatus = (value: unknown): SubscriptionStatus => {
 
 const unixSeconds = (date: Date): number => Math.floor(date.getTime() / 1000);
 
-export const createStripeProvider = (
-  config: StripeConfig,
-): BillingProvider<StripeCapabilities> => {
+export const createStripeProvider = (config: StripeConfig): BillingProvider<StripeCapabilities> => {
   const subjectKey = config.subjectKey ?? 'billing_kit_subject';
   const settlementKey = config.settlementKey ?? 'billing_kit_settlement';
   const metricKey = config.metricKey ?? 'billing_kit_metric';
@@ -170,22 +168,22 @@ export const createStripeProvider = (
 
   const toCustomer = (raw: unknown): ProviderCustomer => {
     const record = object(raw);
-    const metadata = (record['metadata'] ?? {}) as Record<string, unknown>;
+    const metadata = (record.metadata ?? {}) as Record<string, unknown>;
     return {
-      id: str(record['id'], 'customer.id') as ProviderCustomerId,
+      id: str(record.id, 'customer.id') as ProviderCustomerId,
       key: typeof metadata[subjectKey] === 'string' ? (metadata[subjectKey] as string) : null,
-      email: typeof record['email'] === 'string' ? record['email'] : null,
+      email: typeof record.email === 'string' ? record.email : null,
       raw,
     };
   };
 
   const toSubscription = (raw: unknown): ProviderSubscription => {
     const record = object(raw);
-    const start = record['current_period_start'];
-    const end = record['current_period_end'];
+    const start = record.current_period_start;
+    const end = record.current_period_end;
     return {
-      id: str(record['id'], 'subscription.id') as ProviderSubscriptionId,
-      status: subscriptionStatus(record['status']),
+      id: str(record.id, 'subscription.id') as ProviderSubscriptionId,
+      status: subscriptionStatus(record.status),
       currentPeriod:
         typeof start === 'number' && typeof end === 'number'
           ? { start: new Date(start * 1000), end: new Date(end * 1000) }
@@ -196,18 +194,18 @@ export const createStripeProvider = (
 
   const toSettlement = (raw: unknown): SettlementResult => {
     const invoice = object(raw);
-    const currency = normaliseCurrency(invoice['currency'], STRIPE, 'invoice.currency');
+    const currency = normaliseCurrency(invoice.currency, STRIPE, 'invoice.currency');
     return {
-      ref: str(invoice['id'], 'invoice.id') as ProviderSettlementId,
-      status: settlementStatus(invoice['status']),
-      providerTotal: optionalMoneyFromNumber(invoice['total'], currency, STRIPE, 'invoice.total'),
+      ref: str(invoice.id, 'invoice.id') as ProviderSettlementId,
+      status: settlementStatus(invoice.status),
+      providerTotal: optionalMoneyFromNumber(invoice.total, currency, STRIPE, 'invoice.total'),
       providerTax: invoiceTax(invoice, currency),
       raw,
     };
   };
 
   const listData = (payload: unknown): unknown[] => {
-    const data = object(payload)['data'];
+    const data = object(payload).data;
     return Array.isArray(data) ? data : [];
   };
 
@@ -274,14 +272,9 @@ export const createStripeProvider = (
     return toSubscription(raw);
   };
 
-  const cancelSubscription = async (
-    id: ProviderSubscriptionId,
-    at: CancelAt,
-  ): Promise<ProviderSubscription> => {
+  const cancelSubscription = async (id: ProviderSubscriptionId, at: CancelAt): Promise<ProviderSubscription> => {
     if (at === 'immediately') {
-      return toSubscription(
-        await http.request<unknown>({ method: 'DELETE', path: `/v1/subscriptions/${id}` }),
-      );
+      return toSubscription(await http.request<unknown>({ method: 'DELETE', path: `/v1/subscriptions/${id}` }));
     }
     return toSubscription(
       await http.request<unknown>({
@@ -293,23 +286,20 @@ export const createStripeProvider = (
     );
   };
 
-  const resolveItem = async (
-    subscriptionId: ProviderSubscriptionId,
-    metric: string,
-  ): Promise<ProviderItem | null> => {
+  const resolveItem = async (subscriptionId: ProviderSubscriptionId, metric: string): Promise<ProviderItem | null> => {
     const raw = await http.request<unknown>({
       method: 'GET',
       path: `/v1/subscriptions/${subscriptionId}`,
       query: { 'expand[]': 'items.data.price' },
     });
-    const items = object(object(raw)['items'] ?? {})['data'];
+    const items = object(object(raw).items ?? {}).data;
     if (!Array.isArray(items)) return null;
     for (const entry of items) {
-      const price = object(object(entry)['price'] ?? {});
-      const metadata = (price['metadata'] ?? {}) as Record<string, unknown>;
+      const price = object(object(entry).price ?? {});
+      const metadata = (price.metadata ?? {}) as Record<string, unknown>;
       if (metadata[metricKey] !== metric) continue;
       return {
-        id: str(price['id'], 'price.id') as ProviderItemId,
+        id: str(price.id, 'price.id') as ProviderItemId,
         metric,
         raw: price,
       };
@@ -319,9 +309,7 @@ export const createStripeProvider = (
 
   // --- settlement ----------------------------------------------------------
 
-  const settle = async (
-    request: SettlementRequest<'lines' | 'quantity'>,
-  ): Promise<SettlementResult> => {
+  const settle = async (request: SettlementRequest<'lines' | 'quantity'>): Promise<SettlementResult> => {
     const currency = request.currency.toLowerCase();
 
     if (request.mode === 'lines') {
@@ -408,7 +396,7 @@ export const createStripeProvider = (
 
     const finalized = await http.request<unknown>({
       method: 'POST',
-      path: `/v1/invoices/${str(object(invoice)['id'], 'invoice.id')}/finalize`,
+      path: `/v1/invoices/${str(object(invoice).id, 'invoice.id')}/finalize`,
       form: {},
       ...withKey(`${request.idempotencyKey}:finalize`),
     });
@@ -438,7 +426,7 @@ export const createStripeProvider = (
       },
     });
     for (const candidate of listData(listed)) {
-      const metadata = (object(candidate)['metadata'] ?? {}) as Record<string, unknown>;
+      const metadata = (object(candidate).metadata ?? {}) as Record<string, unknown>;
       if (metadata[settlementKey] === lookup.key) return toSettlement(candidate);
     }
     return null;
@@ -450,14 +438,12 @@ export const createStripeProvider = (
     // An invoice is not a payment. Refunding one means finding the payment
     // behind it, and the adapter does that lookup so no caller ever holds a
     // charge id it could be tricked into supplying from a request body.
-    const invoice = object(
-      await http.request<unknown>({ method: 'GET', path: `/v1/invoices/${input.settlementRef}` }),
-    );
+    const invoice = object(await http.request<unknown>({ method: 'GET', path: `/v1/invoices/${input.settlementRef}` }));
     const paymentIntent =
-      typeof invoice['payment_intent'] === 'string'
-        ? invoice['payment_intent']
-        : typeof invoice['payment_intent'] === 'object' && invoice['payment_intent'] !== null
-          ? (invoice['payment_intent'] as Record<string, unknown>)['id']
+      typeof invoice.payment_intent === 'string'
+        ? invoice.payment_intent
+        : typeof invoice.payment_intent === 'object' && invoice.payment_intent !== null
+          ? (invoice.payment_intent as Record<string, unknown>).id
           : undefined;
 
     if (typeof paymentIntent !== 'string') {
@@ -485,14 +471,15 @@ export const createStripeProvider = (
       }),
     );
 
-    const status = raw['status'];
+    const status = raw.status;
     return {
-      ref: str(raw['id'], 'refund.id') as ProviderRefundId,
+      ref: str(raw.id, 'refund.id') as ProviderRefundId,
       // Even though Stripe answers synchronously, the ledger still posts on the
       // webhook. Keeping one path means the asynchronous provider is not the
       // only one exercising it, and a path only one provider uses is a path
       // that is broken.
-      status: status === 'succeeded' ? 'settled' : status === 'failed' || status === 'canceled' ? 'declined' : 'pending',
+      status:
+        status === 'succeeded' ? 'settled' : status === 'failed' || status === 'canceled' ? 'declined' : 'pending',
       raw,
     };
   };

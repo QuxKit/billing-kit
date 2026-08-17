@@ -2,15 +2,9 @@
 // plan needs. All pure: no database, no clock beyond the dates handed in.
 
 import { BillingError } from '../errors.ts';
-import { Money, Quantity, currencyExponent, price, priceTiered, scaleFraction } from '../money.ts';
+import { currencyExponent, Money, price, priceTiered, Quantity, scaleFraction } from '../money.ts';
 import { applyDiscount } from './discount.ts';
-import type {
-  BillingInterval,
-  ChargeLine,
-  PeriodCharge,
-  PeriodChargeInput,
-  Plan,
-} from './types.ts';
+import type { BillingInterval, ChargeLine, PeriodCharge, PeriodChargeInput, Plan } from './types.ts';
 
 /**
  * Validate a plan and return a frozen copy.
@@ -40,7 +34,8 @@ export function definePlan(input: Plan): Plan {
       throw new BillingError({ code: 'currency_mismatch', left: input.currency, right: input.seats.unit.currency });
     }
     if (input.seats.unit.isNegative()) bad('seat price is negative');
-    if ((input.seats.min ?? 0) < 0 || !Number.isInteger(input.seats.min ?? 0)) bad('seat minimum must be a non-negative integer');
+    if ((input.seats.min ?? 0) < 0 || !Number.isInteger(input.seats.min ?? 0))
+      bad('seat minimum must be a non-negative integer');
   }
 
   const seen = new Set<string>();
@@ -48,7 +43,7 @@ export function definePlan(input: Plan): Plan {
     if (!u.metric) bad('a usage component has an empty metric');
     if (seen.has(u.metric)) bad(`metric ${u.metric} appears twice`);
     seen.add(u.metric);
-    if (u.included && u.included.isNegative()) bad(`included allowance for ${u.metric} is negative`);
+    if (u.included?.isNegative()) bad(`included allowance for ${u.metric} is negative`);
   }
 
   if (input.trialDays !== undefined && (!Number.isInteger(input.trialDays) || input.trialDays < 0)) {
@@ -76,7 +71,13 @@ export function chargeForPeriod(plan: Plan, input: PeriodChargeInput = {}): Peri
   const trial = input.trial === true;
   const pro = input.proration;
 
-  if (pro && (pro.periodDays <= 0 || pro.activeDays < 0 || !Number.isInteger(pro.activeDays) || !Number.isInteger(pro.periodDays))) {
+  if (
+    pro &&
+    (pro.periodDays <= 0 ||
+      pro.activeDays < 0 ||
+      !Number.isInteger(pro.activeDays) ||
+      !Number.isInteger(pro.periodDays))
+  ) {
     throw new BillingError({ code: 'invalid_subscription', reason: 'invalid proration window' });
   }
   const prorate = (m: Money): Money =>
@@ -125,7 +126,13 @@ export function chargeForPeriod(plan: Plan, input: PeriodChargeInput = {}): Peri
   // as a negative line, so the returned lines still sum to the total and an
   // invoice can show "−$10.00 coupon" as its own row.
   if (input.discount) {
-    const subtotal = lines.length === 0 ? Money.zero(currency) : Money.sum(lines.map((l) => l.amount), currency);
+    const subtotal =
+      lines.length === 0
+        ? Money.zero(currency)
+        : Money.sum(
+            lines.map((l) => l.amount),
+            currency,
+          );
     if (subtotal.isPositive()) {
       const off = applyDiscount(subtotal, input.discount);
       if (off.isPositive()) {
@@ -134,7 +141,13 @@ export function chargeForPeriod(plan: Plan, input: PeriodChargeInput = {}): Peri
     }
   }
 
-  const total = lines.length === 0 ? Money.zero(currency) : Money.sum(lines.map((l) => l.amount), currency);
+  const total =
+    lines.length === 0
+      ? Money.zero(currency)
+      : Money.sum(
+          lines.map((l) => l.amount),
+          currency,
+        );
   return { currency, lines, total };
 }
 

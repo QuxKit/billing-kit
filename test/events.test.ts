@@ -14,7 +14,7 @@ import { BillingError } from '../src/errors';
 import { aggregateUsage, queryUsage, record, recordMany, validateEvent } from '../src/events';
 import { Quantity } from '../src/money';
 import type { SqlExecutor, UsageEvent } from '../src/types';
-import { SKIP_REASON, setupDatabase, type Harness } from './pg-executor';
+import { type Harness, SKIP_REASON, setupDatabase } from './pg-executor';
 
 const NOW = new Date('2026-08-13T12:00:00Z');
 
@@ -136,7 +136,7 @@ describe('ingest', { skip: harness === null ? SKIP_REASON : false }, () => {
     });
     const mine = stored.filter((s) => s.externalId === event.externalId);
     assert.equal(mine.length, 1, 'nothing was double-billed');
-    assert.equal(mine[0]!.quantity.toDecimalString(), '100.000000000000', 'and nothing was overwritten');
+    assert.equal(mine[0].quantity.toDecimalString(), '100.000000000000', 'and nothing was overwritten');
   });
 
   it('does not mind metadata changing between a call and its retry', async () => {
@@ -318,7 +318,7 @@ describe('ingest', { skip: harness === null ? SKIP_REASON : false }, () => {
         WHERE e.external_id = $1`,
       [event.externalId],
     );
-    assert.match(where[0]!.relname, /_default$/, 'a backdated event belongs in the default partition');
+    assert.match(where[0].relname, /_default$/, 'a backdated event belongs in the default partition');
   });
 });
 
@@ -330,7 +330,10 @@ describe('recordMany', { skip: harness === null ? SKIP_REASON : false }, () => {
     const results = await recordMany(h.db, events, NOW);
 
     assert.equal(results.length, 3);
-    assert.deepEqual(results.map((r) => r.deduplicated), [false, false, false]);
+    assert.deepEqual(
+      results.map((r) => r.deduplicated),
+      [false, false, false],
+    );
     assert.equal(new Set(results.map((r) => r.eventId)).size, 3);
   });
 
@@ -341,8 +344,11 @@ describe('recordMany', { skip: harness === null ? SKIP_REASON : false }, () => {
     const dup = anEvent();
     const results = await recordMany(h.db, [dup, anEvent(), dup], NOW);
 
-    assert.deepEqual(results.map((r) => r.deduplicated), [false, false, true]);
-    assert.equal(results[0]!.eventId, results[2]!.eventId);
+    assert.deepEqual(
+      results.map((r) => r.deduplicated),
+      [false, false, true],
+    );
+    assert.equal(results[0].eventId, results[2].eventId);
 
     const stored = await h.db.query<{ count: string }>(
       'SELECT count(*)::text AS count FROM billing.usage_events WHERE external_id = $1',
@@ -357,7 +363,10 @@ describe('recordMany', { skip: harness === null ? SKIP_REASON : false }, () => {
 
     const fresh = anEvent();
     const results = await recordMany(h.db, [old, fresh], NOW);
-    assert.deepEqual(results.map((r) => r.deduplicated), [true, false]);
+    assert.deepEqual(
+      results.map((r) => r.deduplicated),
+      [true, false],
+    );
   });
 
   it('preserves order between input and output', async () => {
@@ -370,7 +379,7 @@ describe('recordMany', { skip: harness === null ? SKIP_REASON : false }, () => {
     );
     const idByExternal = new Map(stored.map((s) => [s.external_id, s.id]));
     for (let i = 0; i < events.length; i++) {
-      assert.equal(results[i]!.eventId, idByExternal.get(events[i]!.externalId));
+      assert.equal(results[i].eventId, idByExternal.get(events[i].externalId));
     }
   });
 
@@ -436,15 +445,26 @@ describe('aggregateUsage — sum / count / max / unique', { skip: harness === nu
   // dimension in metadata — alice twice, bob once, carol once.
   const seed = async (db: SqlExecutor, subjectId: string) => {
     const at = new Date('2026-08-13T10:00:00Z');
-    const evs: [bigint, string][] = [[10n, 'alice'], [40n, 'bob'], [25n, 'alice'], [5n, 'carol']];
+    const evs: [bigint, string][] = [
+      [10n, 'alice'],
+      [40n, 'bob'],
+      [25n, 'alice'],
+      [5n, 'carol'],
+    ];
     let i = 0;
     for (const [qty, user] of evs) {
       i += 1;
       await record(
         db,
         {
-          tenantId: 'agg', subjectId, source: 'api', externalId: `e-${subjectId}-${i}`,
-          metric: 'calls', quantity: Quantity.fromBigInt(qty), occurredAt: at, metadata: { user },
+          tenantId: 'agg',
+          subjectId,
+          source: 'api',
+          externalId: `e-${subjectId}-${i}`,
+          metric: 'calls',
+          quantity: Quantity.fromBigInt(qty),
+          occurredAt: at,
+          metadata: { user },
         },
         NOW,
       );
@@ -453,38 +473,76 @@ describe('aggregateUsage — sum / count / max / unique', { skip: harness === nu
 
   it('sums the quantities', async () => {
     await seed(h.db, 's-sum');
-    const r = await aggregateUsage(h.db, { tenantId: 'agg', subjectId: 's-sum', metric: 'calls', window: WINDOW, method: 'sum' });
+    const r = await aggregateUsage(h.db, {
+      tenantId: 'agg',
+      subjectId: 's-sum',
+      metric: 'calls',
+      window: WINDOW,
+      method: 'sum',
+    });
     assert.equal(r.quantity.toDecimalString(), '80.000000000000'); // 10+40+25+5
     assert.equal(r.eventCount, 4);
   });
 
   it('counts the events, ignoring quantity', async () => {
     await seed(h.db, 's-count');
-    const r = await aggregateUsage(h.db, { tenantId: 'agg', subjectId: 's-count', metric: 'calls', window: WINDOW, method: 'count' });
+    const r = await aggregateUsage(h.db, {
+      tenantId: 'agg',
+      subjectId: 's-count',
+      metric: 'calls',
+      window: WINDOW,
+      method: 'count',
+    });
     assert.equal(r.quantity.toDecimalString(), '4.000000000000');
   });
 
   it('takes the peak quantity', async () => {
     await seed(h.db, 's-max');
-    const r = await aggregateUsage(h.db, { tenantId: 'agg', subjectId: 's-max', metric: 'calls', window: WINDOW, method: 'max' });
+    const r = await aggregateUsage(h.db, {
+      tenantId: 'agg',
+      subjectId: 's-max',
+      metric: 'calls',
+      window: WINDOW,
+      method: 'max',
+    });
     assert.equal(r.quantity.toDecimalString(), '40.000000000000');
   });
 
   it('counts distinct values of a metadata dimension', async () => {
     await seed(h.db, 's-uniq');
-    const r = await aggregateUsage(h.db, { tenantId: 'agg', subjectId: 's-uniq', metric: 'calls', window: WINDOW, method: 'unique', uniqueBy: 'user' });
+    const r = await aggregateUsage(h.db, {
+      tenantId: 'agg',
+      subjectId: 's-uniq',
+      metric: 'calls',
+      window: WINDOW,
+      method: 'unique',
+      uniqueBy: 'user',
+    });
     assert.equal(r.quantity.toDecimalString(), '3.000000000000'); // alice, bob, carol
   });
 
   it('is zero over an empty window, not an error', async () => {
-    const r = await aggregateUsage(h.db, { tenantId: 'agg', subjectId: 'nobody', metric: 'calls', window: WINDOW, method: 'sum' });
+    const r = await aggregateUsage(h.db, {
+      tenantId: 'agg',
+      subjectId: 'nobody',
+      metric: 'calls',
+      window: WINDOW,
+      method: 'sum',
+    });
     assert.equal(r.quantity.isZero(), true);
     assert.equal(r.eventCount, 0);
   });
 
   it('refuses a unique aggregation with no key', async () => {
     await assert.rejects(
-      () => aggregateUsage(h.db, { tenantId: 'agg', subjectId: 's-uniq', metric: 'calls', window: WINDOW, method: 'unique' }),
+      () =>
+        aggregateUsage(h.db, {
+          tenantId: 'agg',
+          subjectId: 's-uniq',
+          metric: 'calls',
+          window: WINDOW,
+          method: 'unique',
+        }),
       (e: unknown) => BillingError.hasCode(e, 'window_invalid'),
     );
   });

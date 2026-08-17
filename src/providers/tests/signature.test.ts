@@ -18,7 +18,9 @@ const OTHER = 'whsec_rotated';
 const BODY = new TextEncoder().encode('{"id":"evt_1"}');
 
 const digest = (secret: string, ts: number) =>
-  createHmac('sha256', secret).update(`${ts}.${Buffer.from(BODY).toString('utf8')}`).digest('hex');
+  createHmac('sha256', secret)
+    .update(`${ts}.${Buffer.from(BODY).toString('utf8')}`)
+    .digest('hex');
 
 const verify = (header: string, nowMs = 1_000_000 * 1000) =>
   verifyTimestampedHmac({

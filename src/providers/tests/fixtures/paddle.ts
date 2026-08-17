@@ -45,10 +45,10 @@ export const transaction = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-export const withTotals = (
-  base: Record<string, unknown>,
-  totals: Record<string, string>,
-): Record<string, unknown> => ({ ...base, details: { totals } });
+export const withTotals = (base: Record<string, unknown>, totals: Record<string, string>): Record<string, unknown> => ({
+  ...base,
+  details: { totals },
+});
 
 export const subscription = (overrides: Record<string, unknown> = {}) => ({
   id: 'sub_TEST1',

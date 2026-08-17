@@ -1,0 +1,69 @@
+# Release — on a v* tag: build, test, and publish to npm with provenance.
+#
+# Nothing here creates the tag. Cutting a release is: bump the version in
+# package.json, update CHANGELOG.md, merge, then `git tag vX.Y.Z && git push
+# --tags`. NPM_TOKEN is a repository secret (an npm granular token with publish
+# rights on @quxkit); `id-token: write` is what lets npm attach provenance.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: billing_kit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      REQUIRE_DB: 1
+      BILLING_KIT_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/billing_kit_test
+      BILLING_KIT_CLI_TEST_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify
+        run: pnpm lint && pnpm typecheck && pnpm build && pnpm test
+
+      - name: Tag matches package version
+        run: |
+          expected="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version ($expected)" >&2
+            exit 1
+          fi
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public

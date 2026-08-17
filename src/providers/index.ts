@@ -14,6 +14,30 @@
 //     application that can reach them can construct provider calls that bypass
 //     the idempotency the interface guarantees.
 
+export {
+  assertSettlementMode,
+  canCreateSubscriptions,
+  canFindCustomer,
+  ourAmountIsAuthoritative,
+  settlementModeFor,
+  settlementPostsCash,
+  supportsSettlement,
+  taxIsOurs,
+} from './capabilities';
+export { isProviderError, ProviderError, type ProviderErrorKind } from './errors';
+/** Injected in tests and in any runtime without a global `fetch`. */
+export type { FetchLike, HttpRequestInit, HttpResponseLike } from './http';
+export {
+  createPaddleProvider,
+  type PaddleCapabilities,
+  type PaddleConfig,
+} from './paddle';
+export {
+  createStripeProvider,
+  STRIPE_CAPABILITIES,
+  type StripeCapabilities,
+  type StripeConfig,
+} from './stripe';
 export type {
   BillingProvider,
   CancelAt,
@@ -44,34 +68,4 @@ export type {
   SubscriptionStatus,
   VerifiedEvent,
 } from './types';
-
 export { providerIdFromOurRecords } from './types';
-
-export { ProviderError, isProviderError, type ProviderErrorKind } from './errors';
-
-export {
-  assertSettlementMode,
-  canCreateSubscriptions,
-  canFindCustomer,
-  ourAmountIsAuthoritative,
-  settlementModeFor,
-  settlementPostsCash,
-  supportsSettlement,
-  taxIsOurs,
-} from './capabilities';
-
-/** Injected in tests and in any runtime without a global `fetch`. */
-export type { FetchLike, HttpRequestInit, HttpResponseLike } from './http';
-
-export {
-  createStripeProvider,
-  STRIPE_CAPABILITIES,
-  type StripeCapabilities,
-  type StripeConfig,
-} from './stripe';
-
-export {
-  createPaddleProvider,
-  type PaddleCapabilities,
-  type PaddleConfig,
-} from './paddle';

@@ -1,0 +1,13 @@
+{
+  "name": "billing-kit-quickstart",
+  "private": true,
+  "type": "module",
+  "description": "Record usage, post a payment, read a balance — against a real Postgres, through the shipped pg adapter.",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "@quxkit/billing-kit": "link:../..",
+    "pg": "^8.23.0"
+  }
+}

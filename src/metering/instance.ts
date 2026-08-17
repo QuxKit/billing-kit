@@ -14,16 +14,9 @@
 // metering driver into every application that only records events — which is
 // the separation the two entry points exist to keep.
 
-import { drain, meterBatch, ensurePartitions, partitionReport, health } from './driver.ts';
-import type {
-  BatchOptions,
-  BatchResult,
-  DrainOptions,
-  DrainReport,
-  MeteringHealth,
-  PartitionRow,
-} from './types.ts';
 import type { Clock, Logger, SqlExecutor } from '../types.ts';
+import { drain, ensurePartitions, health, meterBatch, partitionReport } from './driver.ts';
+import type { BatchOptions, BatchResult, DrainOptions, DrainReport, MeteringHealth, PartitionRow } from './types.ts';
 
 export interface MeteringOptions {
   db: SqlExecutor;

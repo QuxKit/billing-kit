@@ -1,0 +1,70 @@
+# Changelog
+
+All notable changes to `@quxkit/billing-kit` are recorded here. The format is
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
+[Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+### Added
+- `@quxkit/billing-kit/pg` subpath: `pgExecutor(pool)` — the shipped
+  `SqlExecutor` over a `pg.Pool`, with transaction pinning. `pg` stays an
+  optional peer dependency; the test suite now runs on this adapter instead
+  of a private copy.
+- `examples/quickstart`: a runnable end-to-end program (apply SQL, record a
+  usage event and its retry, post a payment, read the balance).
+- Subscription sweep: a per-run lease (`pg_try_advisory_xact_lock`, keyed by
+  tenant or `lease.key`; `lease: false` to disable), per-row
+  `FOR UPDATE SKIP LOCKED` inside a per-item transaction, and per-item retry
+  with exponential backoff (`retry: { retries, backoffMs, sleep }`).
+  `SweepReport` gains `leased` and `locked`; `SweepError` carries `attempts`
+  and `code`; `SweepError`/`SweepRetry` exported.
+- Typed errors `batch_too_large` (`recordMany` above `RECORD_MANY_MAX` =
+  1,000 events) and `result_too_large` (`entries()` asked for, or walking
+  past, `ENTRIES_MAX_ROWS` = 100,000 rows). Both constants exported.
+- Repo tooling: Biome (`lint`, `format`), c8 (`test:coverage`, thresholds in
+  `.c8rc.json`), `REQUIRE_DB=1` to fail rather than skip when the test
+  database is unreachable, a harness sanity test.
+- GitHub Actions CI (Node 20/22, postgres:16 service), a portable Gitea CI, a
+  tag-triggered release workflow (`npm publish --provenance`), dependabot,
+  CODEOWNERS, SECURITY.md, CONTRIBUTING.md.
+
+### Changed
+- `pnpm test` now runs every test file: `test/`, `test/adversarial/`,
+  `src/providers/tests/` (81 cases) and `src/metering/test/` (17 cases) —
+  the last two were never run by the old glob.
+- The metering test harness reads `BILLING_KIT_TEST_DATABASE_URL` (deriving
+  `PG*` for `psql`) and skips cleanly instead of failing in `before()`.
+- `sql/README.md` lists `001_core.sql` and `020_subscriptions.sql` in the file
+  table and psql sequence.
+- README: quickstart imports the shipped `pg` adapter; an Errors section;
+  the sweep's concurrency contract; the Lago adapter claim removed from the
+  diagram and keywords (no adapter exists; further providers are planned via
+  `@quxkit/billing-kit-adapters`).
+- `prepublishOnly` runs lint, typecheck, build, test and `test:pack`.
+
+### Removed
+- Error codes that were declared and never raised: `window_sealed`,
+  `ledger_immutable`, `account_currency_mismatch`; and the `UsageAggregate`
+  type (no `usage_aggregates` table exists). Type-level only — no runtime
+  path produced them. Window sealing is deferred to a later release.
+
+### Fixed
+- `recordMany` no longer dereferences a missing dedupe claim; it raises
+  `dedupe_unresolved`.
+- `entries()` with no `limit` walked without bound; it now stops with
+  `result_too_large` rather than returning a silently short array or running
+  forever.
+- Sweep errors were recorded after a single attempt and the failed row's
+  ledger post could commit while the period/advance did not; each item is now
+  charged atomically and retried before it is reported.
+
+### Security
+- CI cannot go green without exercising the database (`REQUIRE_DB=1`).
+- Input bounds on batch ingest and ledger reads (above).
+
+## [0.1.0] - 2026-08-14
+
+Initial release: exact money, idempotent ingest, append-only double-entry
+ledger, the metering engine, subscriptions, Stripe and Paddle providers, and
+the `billing-kit` CLI.

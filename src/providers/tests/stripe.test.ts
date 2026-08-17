@@ -13,8 +13,8 @@ import { describe, it } from 'node:test';
 
 import { Money } from '../../money';
 import { createStripeProvider } from '../stripe';
-import { providerIdFromOurRecords } from '../types';
 import type { ProviderCustomerId, ProviderItemId, ProviderSettlementId } from '../types';
+import { providerIdFromOurRecords } from '../types';
 import { expectProviderError } from './fixtures/expect';
 import { createHttpFixture, failThen, noJitter, noSleep, respond } from './fixtures/http';
 import * as fx from './fixtures/stripe';
@@ -56,25 +56,21 @@ describe('stripe: settlement in lines mode', () => {
 
     assert.deepEqual(
       fixture.calls.map((call) => `${call.method} ${call.path}`),
-      [
-        'POST /v1/invoiceitems',
-        'POST /v1/invoiceitems',
-        'POST /v1/invoices',
-        'POST /v1/invoices/in_TEST1/finalize',
-      ],
+      ['POST /v1/invoiceitems', 'POST /v1/invoiceitems', 'POST /v1/invoices', 'POST /v1/invoices/in_TEST1/finalize'],
     );
 
     const items = fixture.callsTo('POST', '/v1/invoiceitems');
     const first = items[0]?.body as Record<string, string>;
-    assert.equal(first['amount'], '3599');
-    assert.equal(first['currency'], 'usd');
+    assert.equal(first.amount, '3599');
+    assert.equal(first.currency, 'usd');
     // The quantity travels as metadata. Stripe's `quantity` multiplies a unit
     // price, and `amount` is already the total — sending both doubles the line.
     assert.equal(first['metadata[billing_kit_quantity]'], '1500000');
-    assert.equal(first['quantity'], undefined);
+    assert.equal(first.quantity, undefined);
     // A fractional quantity survives intact in lines mode, because we computed
     // the amount and Stripe is only being told what it was for.
-    assert.equal((items[1]?.body as Record<string, string>)['metadata[billing_kit_quantity]'], '12.5');
+    const second = items[1]?.body as Record<string, string> | undefined;
+    assert.equal(second?.['metadata[billing_kit_quantity]'], '12.5');
 
     assert.equal(items[0]?.headers['idempotency-key'], 'settle:subject-1:2026-07:line:0');
     assert.equal(items[1]?.headers['idempotency-key'], 'settle:subject-1:2026-07:line:1');
@@ -108,7 +104,7 @@ describe('stripe: settlement in lines mode', () => {
       lines: [{ description: 'tokens', quantity: '1', amount: Money.fromMinor(100n, 'USD') }],
     });
     const invoice = fixture.callsTo('POST', '/v1/invoices')[0]?.body as Record<string, string>;
-    assert.equal(invoice['pending_invoice_items_behavior'], 'include');
+    assert.equal(invoice.pending_invoice_items_behavior, 'include');
     assert.equal(invoice['metadata[billing_kit_settlement]'], 'k');
   });
 
@@ -144,9 +140,9 @@ describe('stripe: settlement in quantity mode', () => {
       quantities: [{ itemId: providerIdFromOurRecords<'item'>('price_X'), quantity: '1200' }],
     });
     const item = fixture.callsTo('POST', '/v1/invoiceitems')[0]?.body as Record<string, string>;
-    assert.equal(item['price'], 'price_X');
-    assert.equal(item['quantity'], '1200');
-    assert.equal(item['amount'], undefined, 'we do not price it in quantity mode');
+    assert.equal(item.price, 'price_X');
+    assert.equal(item.quantity, '1200');
+    assert.equal(item.amount, undefined, 'we do not price it in quantity mode');
   });
 
   it('refuses a fractional quantity instead of truncating it', async () => {
@@ -193,9 +189,7 @@ describe('stripe: recovery', () => {
     const fixture = createHttpFixture({
       routes: {
         'GET /v1/customers/search': respond(fx.list([])),
-        'GET /v1/customers': respond(
-          fx.list([fx.customer({ metadata: { billing_kit_subject: 'subject-999' } })]),
-        ),
+        'GET /v1/customers': respond(fx.list([fx.customer({ metadata: { billing_kit_subject: 'subject-999' } })])),
       },
     });
     const found = await provider(fixture.fetch).findCustomer({
@@ -221,7 +215,7 @@ describe('stripe: recovery', () => {
     // The list is bounded by customer and period, which is why the lookup is a
     // record rather than a bare key.
     const listed = fixture.callsTo('GET', '/v1/invoices')[0];
-    assert.equal(listed?.query['customer'], 'cus_TEST1');
+    assert.equal(listed?.query.customer, 'cus_TEST1');
     assert.equal(listed?.query['created[gte]'], String(Math.floor(PERIOD.start.getTime() / 1000)));
   });
 
@@ -272,8 +266,8 @@ describe('stripe: refunds', () => {
     });
     assert.equal(ack.status, 'settled');
     const call = fixture.callsTo('POST', '/v1/refunds')[0]?.body as Record<string, string>;
-    assert.equal(call['payment_intent'], 'pi_TEST1');
-    assert.equal(call['amount'], '500');
+    assert.equal(call.payment_intent, 'pi_TEST1');
+    assert.equal(call.amount, '500');
   });
 
   it('refuses to refund an invoice that was never paid', async () => {
@@ -349,16 +343,13 @@ describe('stripe: webhook normalisation', () => {
     // rather than assumed, so a provider changing representation is an error
     // naming the field and not a total that is quietly wrong.
     await expectProviderError(
-      () =>
-        verify(fx.event('invoice.payment_succeeded', { id: 'in_1', currency: 'usd', amount_paid: 45.99 })),
+      () => verify(fx.event('invoice.payment_succeeded', { id: 'in_1', currency: 'usd', amount_paid: 45.99 })),
       'malformed_response',
     );
   });
 
   it('maps a deleted subscription to canceled', async () => {
-    const event = await verify(
-      fx.event('customer.subscription.deleted', { id: 'sub_1', status: 'active' }),
-    );
+    const event = await verify(fx.event('customer.subscription.deleted', { id: 'sub_1', status: 'active' }));
     assert.equal(event.kind, 'subscription.changed');
     if (event.kind !== 'subscription.changed') return;
     assert.equal(event.status, 'canceled');

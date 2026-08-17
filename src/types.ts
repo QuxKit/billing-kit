@@ -114,19 +114,6 @@ export interface UsageWindow {
   end: Date;
 }
 
-export interface UsageAggregate {
-  id: string;
-  tenantId: TenantId;
-  subjectId: SubjectId;
-  metric: string;
-  window: UsageWindow;
-  quantity: Quantity;
-  eventCount: number;
-  sealedAt: Date | null;
-  /** Set when this row is a late correction to an already sealed window. */
-  adjustsWindowStart: Date | null;
-}
-
 // --- ledger -----------------------------------------------------------------
 
 /**
@@ -156,13 +143,7 @@ export type AccountKind =
   | 'write_off';
 
 /** What caused a transaction. Half of its natural key. */
-export type LedgerSourceKind =
-  | 'charge'
-  | 'settlement'
-  | 'payment'
-  | 'refund'
-  | 'adjustment'
-  | 'opening_balance';
+export type LedgerSourceKind = 'charge' | 'settlement' | 'payment' | 'refund' | 'adjustment' | 'opening_balance';
 
 /**
  * One leg. Signed: positive is a debit, negative is a credit, and the legs of

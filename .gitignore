@@ -8,3 +8,7 @@ dist/
 
 # `npm pack` writes here unless told otherwise, and verify-pack calls it.
 *.tgz
+coverage/
+
+# Examples resolve the kit via link:../.. and keep their own install; one lockfile in the repo.
+examples/*/pnpm-lock.yaml

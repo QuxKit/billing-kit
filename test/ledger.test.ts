@@ -29,13 +29,16 @@ import {
 } from '../src/ledger';
 import { Money } from '../src/money';
 import type { LedgerLeg } from '../src/types';
-import { SKIP_REASON, setupDatabase, type Harness } from './pg-executor';
+import { type Harness, SKIP_REASON, setupDatabase } from './pg-executor';
 
 const NOW = new Date('2026-08-13T12:00:00Z');
 const usd = (v: string) => Money.fromDecimalString(v, 'USD');
 
 let seq = 0;
-const nextId = (prefix: string) => `${prefix}-${(seq += 1)}`;
+const nextId = (prefix: string): string => {
+  seq += 1;
+  return `${prefix}-${seq}`;
+};
 
 describe('assertBalanced', () => {
   it('accepts legs that sum to zero', () => {
@@ -110,7 +113,10 @@ describe('posting builders', () => {
       settled: usd('19.99'),
     });
     assert.equal(p.legs.length, 2);
-    assert.equal(p.legs.some((l) => l.account === 'settlement_variance'), false);
+    assert.equal(
+      p.legs.some((l) => l.account === 'settlement_variance'),
+      false,
+    );
   });
 
   it('refuses a negative refund, because the legs carry the direction', () => {
@@ -128,11 +134,18 @@ describe('posting builders', () => {
   });
 
   it('makes a refund the mirror of a payment, not an edit of it', () => {
-    const pay = paymentPosting({ tenantId: 't', subjectId: 's', paymentId: 'p1', amount: usd('19.99'), occurredAt: NOW });
+    const pay = paymentPosting({
+      tenantId: 't',
+      subjectId: 's',
+      paymentId: 'p1',
+      amount: usd('19.99'),
+      occurredAt: NOW,
+    });
     const ref = refundPosting({ tenantId: 't', subjectId: 's', refundId: 'r1', amount: usd('19.99'), occurredAt: NOW });
 
-    const cashIn = pay.legs.find((l) => l.account === 'cash')!;
-    const cashOut = ref.legs.find((l) => l.account === 'cash')!;
+    const cashIn = pay.legs.find((l) => l.account === 'cash');
+    const cashOut = ref.legs.find((l) => l.account === 'cash');
+    assert.ok(cashIn && cashOut);
     assert.equal(cashIn.amount.plus(cashOut.amount).minor, 0n);
   });
 });
@@ -156,9 +169,15 @@ describe('ledger persistence', { skip: harness === null ? SKIP_REASON : false },
 
     assert.equal(result.deduplicated, false);
     assert.equal(result.entries.length, 2);
-    assert.deepEqual(result.entries.map((e) => e.legNo), [0, 1]);
+    assert.deepEqual(
+      result.entries.map((e) => e.legNo),
+      [0, 1],
+    );
     assert.equal(
-      Money.sum(result.entries.map((e) => e.amount), 'USD').minor,
+      Money.sum(
+        result.entries.map((e) => e.amount),
+        'USD',
+      ).minor,
       0n,
     );
   });
@@ -168,12 +187,9 @@ describe('ledger persistence', { skip: harness === null ? SKIP_REASON : false },
     // Larger than 2^53, so a driver or a layer that reached for a JS number
     // would come back with a different value.
     const amount = Money.fromMinor('9007199254740993', 'USD');
-    const result = await post(
-      h.db,
-      accrualPosting({ tenantId: 't1', subjectId: 's-big', chargeId, amount }),
-      NOW,
-    );
-    const debit = result.entries.find((e) => e.account === 'customer_balance')!;
+    const result = await post(h.db, accrualPosting({ tenantId: 't1', subjectId: 's-big', chargeId, amount }), NOW);
+    const debit = result.entries.find((e) => e.account === 'customer_balance');
+    assert.ok(debit);
     assert.equal(debit.amount.minor, 9007199254740993n);
     assert.equal(debit.amount.toJSON().amount, '9007199254740993');
   });
@@ -411,10 +427,7 @@ describe('ledger persistence', { skip: harness === null ? SKIP_REASON : false },
 
     const rows = await entries(h.db, { tenantId: 't1', subjectId });
     assert.equal(rows.length, 4, 'both the payment and the refund survive as history');
-    assert.deepEqual(
-      [...new Set(rows.map((r) => r.sourceKind))].sort(),
-      ['payment', 'refund'],
-    );
+    assert.deepEqual([...new Set(rows.map((r) => r.sourceKind))].sort(), ['payment', 'refund']);
   });
 
   it('lists entries oldest first and filters by account', async () => {
@@ -429,9 +442,9 @@ describe('ledger persistence', { skip: harness === null ? SKIP_REASON : false },
 
     assert.equal(all.length, 2);
     assert.equal(onlyCash.length, 1);
-    assert.equal(onlyCash[0]!.account, 'revenue_accrued');
+    assert.equal(onlyCash[0].account, 'revenue_accrued');
     for (let i = 1; i < all.length; i++) {
-      assert.ok(all[i - 1]!.postedAt.getTime() <= all[i]!.postedAt.getTime());
+      assert.ok(all[i - 1].postedAt.getTime() <= all[i].postedAt.getTime());
     }
   });
 });
@@ -444,7 +457,7 @@ describe('partition maintenance', { skip: harness === null ? SKIP_REASON : false
       `SELECT count(*)::text AS n FROM billing.${table} WHERE subject_id = $1`,
       [subjectId],
     );
-    return Number(rows[0]!.n);
+    return Number(rows[0].n);
   };
 
   it('stores a posting outside every month partition, in the default', async () => {
@@ -455,8 +468,11 @@ describe('partition maintenance', { skip: harness === null ? SKIP_REASON : false
     await post(
       h.db,
       paymentPosting({
-        tenantId: 't1', subjectId: 'far-past', paymentId: nextId('pay'),
-        amount: usd('42.00'), occurredAt: long,
+        tenantId: 't1',
+        subjectId: 'far-past',
+        paymentId: nextId('pay'),
+        amount: usd('42.00'),
+        occurredAt: long,
       }),
       NOW,
     );
@@ -464,7 +480,10 @@ describe('partition maintenance', { skip: harness === null ? SKIP_REASON : false
     assert.equal(await rowsIn('ledger_entries_default', 'far-past'), 2);
 
     const cash = await balance(h.db, {
-      tenantId: 't1', subjectId: 'far-past', account: 'cash', currency: 'USD',
+      tenantId: 't1',
+      subjectId: 'far-past',
+      account: 'cash',
+      currency: 'USD',
     });
     assert.equal(cash.toDecimalString(), '42.00', 'and it is part of the balance, not a row in a corner');
   });
@@ -481,8 +500,11 @@ describe('partition maintenance', { skip: harness === null ? SKIP_REASON : false
     await post(
       h.db,
       paymentPosting({
-        tenantId: 't1', subjectId: 'late-payment', paymentId,
-        amount: usd('7.50'), occurredAt: late,
+        tenantId: 't1',
+        subjectId: 'late-payment',
+        paymentId,
+        amount: usd('7.50'),
+        occurredAt: late,
       }),
       NOW,
     );
@@ -499,12 +521,15 @@ describe('partition maintenance', { skip: harness === null ? SKIP_REASON : false
     // The money did not change on the way, and the entries are still reachable
     // through the parent rather than stranded in a partition.
     const cash = await balance(h.db, {
-      tenantId: 't1', subjectId: 'late-payment', account: 'cash', currency: 'USD',
+      tenantId: 't1',
+      subjectId: 'late-payment',
+      account: 'cash',
+      currency: 'USD',
     });
     assert.equal(cash.toDecimalString(), '7.50');
     const rows = await entries(h.db, { tenantId: 't1', subjectId: 'late-payment' });
     assert.equal(rows.length, 2);
-    assert.equal(rows[0]!.sourceId, paymentId);
+    assert.equal(rows[0].sourceId, paymentId);
 
     // Rows for months that still have no partition stay put rather than being
     // dragged along, and the default is still append-only afterwards: the move
@@ -545,7 +570,7 @@ describe('partition maintenance', { skip: harness === null ? SKIP_REASON : false
       SELECT count(*)::text AS bad FROM b
        WHERE lo <> (date_trunc('month', lo AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
           OR hi <> ((date_trunc('month', lo AT TIME ZONE 'UTC') + interval '1 month') AT TIME ZONE 'UTC')`);
-    assert.equal(rows[0]!.bad, '0', 'a month partition must span exactly one UTC calendar month');
+    assert.equal(rows[0].bad, '0', 'a month partition must span exactly one UTC calendar month');
   });
 });
 
@@ -555,8 +580,8 @@ describe('credit notes', () => {
     assertBalanced(note.legs);
     const bySide = Object.fromEntries(note.legs.map((l) => [l.account, l.amount.minor]));
     // accrual is customer_balance +, revenue_accrued −; a credit note is the mirror
-    assert.equal(bySide['customer_balance'], -1999n);
-    assert.equal(bySide['revenue_accrued'], 1999n);
+    assert.equal(bySide.customer_balance, -1999n);
+    assert.equal(bySide.revenue_accrued, 1999n);
   });
 
   it('refuses a negative amount', () => {
@@ -572,8 +597,16 @@ describe('credit notes and wallets — Postgres', { skip: harness === null ? SKI
 
   it('a credit note lowers a customer balance without editing the charge', async () => {
     const subjectId = nextId('sub');
-    await post(h.db, accrualPosting({ tenantId: 't1', subjectId, chargeId: nextId('charge'), amount: usd('50.00') }), NOW);
-    await post(h.db, creditNotePosting({ tenantId: 't1', subjectId, creditNoteId: nextId('cn'), amount: usd('20.00') }), NOW);
+    await post(
+      h.db,
+      accrualPosting({ tenantId: 't1', subjectId, chargeId: nextId('charge'), amount: usd('50.00') }),
+      NOW,
+    );
+    await post(
+      h.db,
+      creditNotePosting({ tenantId: 't1', subjectId, creditNoteId: nextId('cn'), amount: usd('20.00') }),
+      NOW,
+    );
 
     const bal = await balance(h.db, { tenantId: 't1', subjectId, account: 'customer_balance', currency: 'USD' });
     assert.equal(bal.minor, 3000n, '50 charged − 20 credited');
@@ -585,12 +618,30 @@ describe('credit notes and wallets — Postgres', { skip: harness === null ? SKI
   it('a wallet is topped up from a payment and drawn down against a charge', async () => {
     const subjectId = nextId('wal');
     // prepaid top-up: cash in, credit liability up
-    await post(h.db, walletTopupPosting({ tenantId: 't1', subjectId, paymentId: nextId('pay'), amount: usd('50.00'), occurredAt: NOW }), NOW);
+    await post(
+      h.db,
+      walletTopupPosting({
+        tenantId: 't1',
+        subjectId,
+        paymentId: nextId('pay'),
+        amount: usd('50.00'),
+        occurredAt: NOW,
+      }),
+      NOW,
+    );
     assert.equal((await walletBalance(h.db, { tenantId: 't1', subjectId, currency: 'USD' })).minor, 5000n);
 
     // charge 30, then redeem it from the wallet
-    await post(h.db, accrualPosting({ tenantId: 't1', subjectId, chargeId: nextId('charge'), amount: usd('30.00') }), NOW);
-    await post(h.db, walletRedeemPosting({ tenantId: 't1', subjectId, redemptionId: nextId('rdm'), amount: usd('30.00') }), NOW);
+    await post(
+      h.db,
+      accrualPosting({ tenantId: 't1', subjectId, chargeId: nextId('charge'), amount: usd('30.00') }),
+      NOW,
+    );
+    await post(
+      h.db,
+      walletRedeemPosting({ tenantId: 't1', subjectId, redemptionId: nextId('rdm'), amount: usd('30.00') }),
+      NOW,
+    );
 
     // wallet down to 20, and the charge is settled by the credit
     assert.equal((await walletBalance(h.db, { tenantId: 't1', subjectId, currency: 'USD' })).minor, 2000n);
@@ -600,7 +651,17 @@ describe('credit notes and wallets — Postgres', { skip: harness === null ? SKI
 
   it('redeeming is idempotent on its id', async () => {
     const subjectId = nextId('wal');
-    await post(h.db, walletTopupPosting({ tenantId: 't1', subjectId, paymentId: nextId('pay'), amount: usd('10.00'), occurredAt: NOW }), NOW);
+    await post(
+      h.db,
+      walletTopupPosting({
+        tenantId: 't1',
+        subjectId,
+        paymentId: nextId('pay'),
+        amount: usd('10.00'),
+        occurredAt: NOW,
+      }),
+      NOW,
+    );
     const redeem = walletRedeemPosting({ tenantId: 't1', subjectId, redemptionId: 'rdm_fixed', amount: usd('4.00') });
     const first = await post(h.db, redeem, NOW);
     const again = await post(h.db, redeem, NOW);

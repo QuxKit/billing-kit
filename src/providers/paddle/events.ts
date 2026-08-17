@@ -78,14 +78,14 @@ export const parseTimestamp = (value: unknown, field: string): Date => {
  * records money arriving that a credit note already cancelled.
  */
 const chargedAmount = (totals: Record<string, unknown>, currency: string) => {
-  const value = totals['grand_total'] ?? totals['total'];
+  const value = totals.grand_total ?? totals.total;
   return moneyFromMinorString(value, currency, PADDLE, 'details.totals.grand_total');
 };
 
 const totalsOf = (transaction: Record<string, unknown>): Record<string, unknown> => {
-  const details = transaction['details'];
+  const details = transaction.details;
   if (typeof details !== 'object' || details === null) return {};
-  const totals = (details as Record<string, unknown>)['totals'];
+  const totals = (details as Record<string, unknown>).totals;
   return typeof totals === 'object' && totals !== null ? (totals as Record<string, unknown>) : {};
 };
 
@@ -108,21 +108,21 @@ const subscriptionStatus = (value: unknown): SubscriptionStatus => {
 
 export const normalisePaddleEvent = (payload: unknown): VerifiedEvent => {
   const event = object(payload);
-  const kind = str(event['event_type'], 'event_type');
+  const kind = str(event.event_type, 'event_type');
   const base = {
-    providerEventId: str(event['event_id'], 'event_id'),
-    occurredAt: parseTimestamp(event['occurred_at'], 'occurred_at'),
+    providerEventId: str(event.event_id, 'event_id'),
+    occurredAt: parseTimestamp(event.occurred_at, 'occurred_at'),
     raw: payload,
   };
-  const data = object(event['data']);
+  const data = object(event.data);
 
   switch (kind) {
     case 'transaction.completed': {
-      const currency = normaliseCurrency(data['currency_code'], PADDLE, 'transaction.currency_code');
+      const currency = normaliseCurrency(data.currency_code, PADDLE, 'transaction.currency_code');
       return {
         ...base,
         kind: 'payment.succeeded',
-        settlementRef: str(data['id'], 'transaction.id'),
+        settlementRef: str(data.id, 'transaction.id'),
         amount: chargedAmount(totalsOf(data), currency),
       };
     }
@@ -131,39 +131,39 @@ export const normalisePaddleEvent = (payload: unknown): VerifiedEvent => {
       return {
         ...base,
         kind: 'payment.failed',
-        settlementRef: str(data['id'], 'transaction.id'),
-        reason: typeof data['status'] === 'string' ? data['status'] : 'payment_failed',
+        settlementRef: str(data.id, 'transaction.id'),
+        reason: typeof data.status === 'string' ? data.status : 'payment_failed',
       };
 
     case 'transaction.billed': {
-      const currency = normaliseCurrency(data['currency_code'], PADDLE, 'transaction.currency_code');
+      const currency = normaliseCurrency(data.currency_code, PADDLE, 'transaction.currency_code');
       const totals = totalsOf(data);
       return {
         ...base,
         kind: 'settlement.finalized',
-        settlementRef: str(data['id'], 'transaction.id'),
+        settlementRef: str(data.id, 'transaction.id'),
         // This is the first moment we learn the real number. Under quantity
         // settlement against a merchant of record, everything we computed
         // before now was an estimate, and the ledger records both.
-        total: moneyFromMinorString(totals['total'], currency, PADDLE, 'details.totals.total'),
+        total: moneyFromMinorString(totals.total, currency, PADDLE, 'details.totals.total'),
         // Their tax, their liability. Recorded, never added to our revenue.
-        tax: optionalMoneyFromMinorString(totals['tax'], currency, PADDLE, 'details.totals.tax'),
+        tax: optionalMoneyFromMinorString(totals.tax, currency, PADDLE, 'details.totals.tax'),
       };
     }
 
     case 'transaction.canceled':
-      return { ...base, kind: 'settlement.voided', settlementRef: str(data['id'], 'transaction.id') };
+      return { ...base, kind: 'settlement.voided', settlementRef: str(data.id, 'transaction.id') };
 
     case 'adjustment.created':
     case 'adjustment.updated': {
-      if (data['action'] !== 'refund') {
+      if (data.action !== 'refund') {
         // Credits and chargebacks are adjustments too, and they are not
         // refunds. Collapsing them would post the wrong ledger legs.
-        return { ...base, kind: 'unknown', providerKind: `${kind}:${String(data['action'])}` };
+        return { ...base, kind: 'unknown', providerKind: `${kind}:${String(data.action)}` };
       }
-      const currency = normaliseCurrency(data['currency_code'], PADDLE, 'adjustment.currency_code');
-      const refundRef = str(data['id'], 'adjustment.id');
-      const status = data['status'];
+      const currency = normaliseCurrency(data.currency_code, PADDLE, 'adjustment.currency_code');
+      const refundRef = str(data.id, 'adjustment.id');
+      const status = data.status;
 
       if (status === 'rejected') {
         return { ...base, kind: 'refund.declined', refundRef, reason: 'rejected' };
@@ -173,13 +173,13 @@ export const normalisePaddleEvent = (payload: unknown): VerifiedEvent => {
         // is true, so neither is written.
         return { ...base, kind: 'unknown', providerKind: `${kind}:${String(status)}` };
       }
-      const totals = object(data['totals'] ?? {});
+      const totals = object(data.totals ?? {});
       return {
         ...base,
         kind: 'refund.settled',
         refundRef,
-        settlementRef: typeof data['transaction_id'] === 'string' ? data['transaction_id'] : null,
-        amount: moneyFromMinorString(totals['total'], currency, PADDLE, 'adjustment.totals.total'),
+        settlementRef: typeof data.transaction_id === 'string' ? data.transaction_id : null,
+        amount: moneyFromMinorString(totals.total, currency, PADDLE, 'adjustment.totals.total'),
       };
     }
 
@@ -193,8 +193,8 @@ export const normalisePaddleEvent = (payload: unknown): VerifiedEvent => {
       return {
         ...base,
         kind: 'subscription.changed',
-        subscriptionRef: str(data['id'], 'subscription.id'),
-        status: subscriptionStatus(data['status']),
+        subscriptionRef: str(data.id, 'subscription.id'),
+        status: subscriptionStatus(data.status),
       };
 
     default:

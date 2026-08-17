@@ -15,8 +15,11 @@
 // ones you care about. Override the prefix with BILLING_KIT_TEST_DB.
 
 import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { REQUIRE_DB, SKIP_REASON } from './pg-env.ts';
+
+export { REQUIRE_DB, SKIP_REASON } from './pg-env.ts';
 
 const exec = promisify(execFile);
 
@@ -32,13 +35,7 @@ const SQL_DIR = join(import.meta.dirname, '..', '..', '..', 'sql');
  * 010_metering.sql in an incompatible shape, and 001_core's won. 010 refuses to
  * apply without it. 011 must precede any charge; see its header.
  */
-const SCHEMA_FILES = [
-  '001_core.sql',
-  '010_metering.sql',
-  '011_partitions.sql',
-  '012_meter_batch.sql',
-  '013_runs.sql',
-];
+const SCHEMA_FILES = ['001_core.sql', '010_metering.sql', '011_partitions.sql', '012_meter_batch.sql', '013_runs.sql'];
 
 export interface SeedOptions {
   items: number;
@@ -54,6 +51,12 @@ export interface SeedOptions {
 
 export interface Harness {
   database: string;
+  /**
+   * Probe the server. False means the DB-backed suite should skip (with
+   * SKIP_REASON); under REQUIRE_DB an unreachable server throws instead, so CI
+   * cannot go green having run none of this.
+   */
+  available(): Promise<boolean>;
   /** Drop, recreate, apply sql/010..013, and create partitions. */
   createDatabase(): Promise<void>;
   /** Empty the data, keep the schema. */
@@ -110,23 +113,24 @@ export const createHarness = (name: string): Harness => {
   const database = `${PREFIX}_${name}`;
 
   const psql = async (sql: string): Promise<string> => {
-    const { stdout } = await exec('psql', [
-      '-X',
-      '-q',
-      '-A',
-      '-t',
-      '-v',
-      'ON_ERROR_STOP=1',
-      '-d',
-      database,
-      '-c',
-      sql,
-    ]);
+    const { stdout } = await exec('psql', ['-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-d', database, '-c', sql]);
     return stdout.trim();
   };
 
   return {
     database,
+
+    available: async (): Promise<boolean> => {
+      try {
+        await exec('psql', ['-X', '-q', '-A', '-t', '-d', 'postgres', '-c', 'SELECT 1']);
+        return true;
+      } catch (error) {
+        if (REQUIRE_DB) {
+          throw new Error(`REQUIRE_DB is set and the test database is unreachable: ${SKIP_REASON}`, { cause: error });
+        }
+        return false;
+      }
+    },
 
     createDatabase: async (): Promise<void> => {
       await exec('psql', ['-X', '-q', '-d', 'postgres', '-c', `DROP DATABASE IF EXISTS ${database}`]);

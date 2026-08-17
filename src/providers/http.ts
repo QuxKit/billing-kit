@@ -105,7 +105,9 @@ export const formEncode = (input: Record<string, unknown>): string => {
       return;
     }
     if (Array.isArray(value)) {
-      value.forEach((item, index) => walk(`${prefix}[${index}]`, item));
+      value.forEach((item, index) => {
+        walk(`${prefix}[${index}]`, item);
+      });
       return;
     }
     if (typeof value === 'object') {
@@ -138,8 +140,7 @@ const kindForStatus = (status: number): ProviderErrorKind => {
   return 'invalid_request';
 };
 
-const retryableStatus = (status: number): boolean =>
-  status === 429 || status === 408 || status >= 500;
+const retryableStatus = (status: number): boolean => status === 429 || status === 408 || status >= 500;
 
 // ---------------------------------------------------------------------------
 // The client
@@ -253,8 +254,7 @@ export const createHttpClient = (options: HttpClientOptions): HttpClient => {
       // A 5xx on a request we cannot repeat is ambiguous, not merely
       // unavailable: a gateway timeout is returned by the gateway, and the
       // provider behind it may well have processed the request.
-      const effectiveKind: ProviderErrorKind =
-        !repeatable && result.status >= 500 ? 'ambiguous' : kind;
+      const effectiveKind: ProviderErrorKind = !repeatable && result.status >= 500 ? 'ambiguous' : kind;
 
       const error = new ProviderError({
         kind: effectiveKind,
@@ -275,11 +275,14 @@ export const createHttpClient = (options: HttpClientOptions): HttpClient => {
     // Unreachable: the loop either returns or throws on its last attempt. Kept
     // so the function has no implicit `undefined` return, which would type as a
     // successful call that produced nothing.
-    throw lastError ?? new ProviderError({
-      kind: 'provider_unavailable',
-      provider: options.provider,
-      message: `${options.provider}: exhausted attempts with no error recorded`,
-    });
+    throw (
+      lastError ??
+      new ProviderError({
+        kind: 'provider_unavailable',
+        provider: options.provider,
+        message: `${options.provider}: exhausted attempts with no error recorded`,
+      })
+    );
   };
 
   const requestOrNull = async <T>(req: HttpRequest): Promise<T | null> => {
@@ -299,11 +302,8 @@ export const createHttpClient = (options: HttpClientOptions): HttpClient => {
 const backoff = (attempt: number, random: () => number): number =>
   Math.floor(random() * BASE_BACKOFF_MS * 2 ** (attempt - 1));
 
-const retryAfter = (
-  result: { status: number },
-  attempt: number,
-  random: () => number,
-): number => backoff(attempt, random) + (result.status === 429 ? BASE_BACKOFF_MS : 0);
+const retryAfter = (result: { status: number }, attempt: number, random: () => number): number =>
+  backoff(attempt, random) + (result.status === 429 ? BASE_BACKOFF_MS : 0);
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
@@ -314,15 +314,15 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
 const extractCode = (body: unknown): string | undefined => {
   const root = asRecord(body);
   if (!root) return undefined;
-  const nested = asRecord(root['error']);
-  const code = nested?.['code'] ?? nested?.['type'] ?? root['code'] ?? root['type'];
+  const nested = asRecord(root.error);
+  const code = nested?.code ?? nested?.type ?? root.code ?? root.type;
   return typeof code === 'string' ? code : undefined;
 };
 
 const extractMessage = (body: unknown): string | undefined => {
   const root = asRecord(body);
   if (!root) return undefined;
-  const nested = asRecord(root['error']);
-  const message = nested?.['detail'] ?? nested?.['message'] ?? root['message'] ?? root['detail'];
+  const nested = asRecord(root.error);
+  const message = nested?.detail ?? nested?.message ?? root.message ?? root.detail;
   return typeof message === 'string' ? message : undefined;
 };

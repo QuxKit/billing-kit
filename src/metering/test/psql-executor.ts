@@ -17,8 +17,9 @@
 //
 // A real adapter over `pg.Pool` is about ten lines and belongs with the docs.
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import type { SqlExecutor } from '../../types.ts';
+import './pg-env.ts';
 
 const SENTINEL = '__billing_kit_eos__';
 

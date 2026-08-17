@@ -163,10 +163,10 @@ export const ensurePartitions = async (
   db: SqlExecutor,
   options: { monthsAhead?: number; monthsBehind?: number } = {},
 ): Promise<number> => {
-  const rows = await db.query<{ created: unknown }>(
-    'SELECT billing.ensure_partitions($1, $2) AS created',
-    [options.monthsAhead ?? 3, options.monthsBehind ?? 1],
-  );
+  const rows = await db.query<{ created: unknown }>('SELECT billing.ensure_partitions($1, $2) AS created', [
+    options.monthsAhead ?? 3,
+    options.monthsBehind ?? 1,
+  ]);
   return asInt(rows[0]?.created, 'created');
 };
 
@@ -284,31 +284,25 @@ export const drain = async (options: DrainOptions): Promise<DrainReport> => {
   let itemsSuspended = 0;
   let status: DrainStatus = 'bounded';
 
-  const settle = async (
-    finalStatus: DrainStatus | 'failed',
-    error?: unknown,
-  ): Promise<void> => {
+  const settle = async (finalStatus: DrainStatus | 'failed', error?: unknown): Promise<void> => {
     const durationMs = clock().getTime() - startedAt;
     const message = error instanceof Error ? error.message : error === undefined ? null : String(error);
     const code =
       error !== null && typeof error === 'object' && 'code' in error ? String((error as { code: unknown }).code) : null;
     try {
-      await db.query(
-        `SELECT billing.settle_meter_run($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)`,
-        [
-          id,
-          finalStatus,
-          iterations,
-          itemsBilled.toString(),
-          minutesBilled.toString(),
-          itemsSuspended.toString(),
-          accountsUpdated.toString(),
-          amountsToJson(amounts),
-          durationMs,
-          message,
-          code,
-        ],
-      );
+      await db.query(`SELECT billing.settle_meter_run($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)`, [
+        id,
+        finalStatus,
+        iterations,
+        itemsBilled.toString(),
+        minutesBilled.toString(),
+        itemsSuspended.toString(),
+        accountsUpdated.toString(),
+        amountsToJson(amounts),
+        durationMs,
+        message,
+        code,
+      ]);
     } catch (settleError) {
       // Must never mask the original. A failed drain whose failure could not be
       // recorded is still a failed drain, and the caller needs the first error,

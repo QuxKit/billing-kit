@@ -1,10 +1,14 @@
-# CI — typecheck, build and the full test suite on every push and PR.
+# CI — lint, typecheck, build and the full test suite on every push and PR.
 #
 # Runs on the self-hosted `host` runner (brett-local), which has node (nvm),
 # pnpm, git and PostgreSQL already — so the DB-backed tests run for real rather
-# than skipping. No external actions are used (no actions/checkout): the runner
-# has no configured action registry, so the checkout is a plain git clone with
-# the job token, which keeps this self-contained.
+# than skipping, and REQUIRE_DB=1 makes an unreachable database a failure. No
+# external actions are used (no actions/checkout): the runner has no configured
+# action registry, so the checkout is a plain git clone with the job token.
+#
+# Every path is derived, never hardcoded: nvm's newest node bin dir, and
+# Homebrew's prefix for pnpm and psql. The same script set as
+# .github/workflows/ci.yml, so the two runners agree on what green means.
 name: CI
 
 on:
@@ -17,13 +21,14 @@ jobs:
     runs-on: host
     steps:
       - name: Put node / pnpm / psql on PATH
-        # nvm's node is not on the runner's PATH by default; glob the installed
-        # version so a node upgrade does not silently break CI. GITHUB_PATH is
-        # prepended for every later step.
+        # GITHUB_PATH is prepended for every later step. Globbing nvm's
+        # installed versions means a node upgrade does not silently break CI.
         run: |
-          ls -d /Users/ezyp/.nvm/versions/node/*/bin | tail -1 >> "$GITHUB_PATH"
-          echo "/opt/homebrew/opt/postgresql@17/bin" >> "$GITHUB_PATH"
-          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          ls -d "$HOME"/.nvm/versions/node/*/bin | tail -1 >> "$GITHUB_PATH"
+          if command -v brew >/dev/null 2>&1; then
+            echo "$(brew --prefix postgresql@17)/bin" >> "$GITHUB_PATH"
+            echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          fi
 
       - name: Checkout
         run: |
@@ -31,12 +36,14 @@ jobs:
           git clone "http://token:${{ github.token }}@localhost:3003/${{ github.repository }}.git" src
           cd src && git checkout "${{ github.sha }}"
 
-      - name: Typecheck, build, test
+      - name: Lint, typecheck, build, test with coverage
         working-directory: src
         env:
+          REQUIRE_DB: 1
           BILLING_KIT_TEST_DATABASE_URL: postgres://localhost:5432/billing_kit_test
         run: |
-          pnpm install
-          pnpm run typecheck
-          pnpm run build
-          pnpm test
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm typecheck
+          pnpm build
+          pnpm run test:coverage

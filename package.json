@@ -25,7 +25,6 @@
     "subscriptions",
     "stripe",
     "paddle",
-    "lago",
     "postgres",
     "typescript"
   ],
@@ -65,6 +64,14 @@
       "import": "./dist/subscriptions/index.mjs",
       "require": "./dist/subscriptions/index.cjs"
     },
+    "./pg": {
+      "types": {
+        "import": "./dist/pg.d.ts",
+        "require": "./dist/pg.d.cts"
+      },
+      "import": "./dist/pg.mjs",
+      "require": "./dist/pg.cjs"
+    },
     "./sql/*": "./sql/*",
     "./package.json": "./package.json"
   },
@@ -84,12 +91,17 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm run test:unit && pnpm run test:adversarial",
-    "pretest:unit": "pnpm run build",
-    "test:unit": "tsx --test --test-concurrency=1 test/*.test.ts",
-    "test:adversarial": "tsx --test --test-concurrency=1 test/adversarial/*.test.ts",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "pnpm run build && pnpm run test:all",
+    "test:all": "tsx --test --test-concurrency=1 'test/*.test.ts' 'test/adversarial/*.test.ts' 'src/providers/tests/*.test.ts' 'src/metering/test/*.test.ts'",
+    "test:unit": "pnpm run build && tsx --test --test-concurrency=1 'test/*.test.ts'",
+    "test:adversarial": "tsx --test --test-concurrency=1 'test/adversarial/*.test.ts'",
+    "test:providers": "tsx --test --test-concurrency=1 'src/providers/tests/*.test.ts'",
+    "test:metering": "tsx --test --test-concurrency=1 'src/metering/test/*.test.ts'",
+    "test:coverage": "pnpm run build && c8 pnpm run test:all",
     "test:pack": "tsx --test scripts/verify-pack.ts",
-    "prepublishOnly": "pnpm run build && pnpm test && pnpm run typecheck && pnpm run test:pack"
+    "prepublishOnly": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm test && pnpm run test:pack"
   },
   "publishConfig": {
     "access": "restricted"
@@ -103,8 +115,10 @@
     }
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.8",
     "@types/node": "^22.9.0",
     "@types/pg": "^8.21.0",
+    "c8": "^12.0.0",
     "pg": "^8.23.0",
     "tsup": "^8.5.1",
     "tsx": "^4.19.2",

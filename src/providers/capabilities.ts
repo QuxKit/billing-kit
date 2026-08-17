@@ -10,16 +10,10 @@
 // should be a log line, an error message, or a test.
 
 import { ProviderError } from './errors';
-import type {
-  BillingProvider,
-  ProviderCapabilities,
-  SettlementMode,
-} from './types';
+import type { BillingProvider, ProviderCapabilities, SettlementMode } from './types';
 
-export const supportsSettlement = (
-  capabilities: ProviderCapabilities,
-  mode: SettlementMode,
-): boolean => capabilities.settlement.includes(mode);
+export const supportsSettlement = (capabilities: ProviderCapabilities, mode: SettlementMode): boolean =>
+  capabilities.settlement.includes(mode);
 
 /**
  * The runtime guard for the dynamic path.
@@ -30,10 +24,7 @@ export const supportsSettlement = (
  * configuration row, and it fails before any provider call rather than halfway
  * through settling a period.
  */
-export const assertSettlementMode = (
-  provider: BillingProvider,
-  mode: SettlementMode,
-): void => {
+export const assertSettlementMode = (provider: BillingProvider, mode: SettlementMode): void => {
   if (supportsSettlement(provider.capabilities, mode)) return;
   throw new ProviderError({
     kind: 'unsupported',
@@ -53,10 +44,7 @@ export const assertSettlementMode = (
  * modes disagree about who owns the price, and swapping them without telling
  * the ledger produces a variance nobody can attribute a month later.
  */
-export const settlementModeFor = (
-  provider: BillingProvider,
-  preferred?: SettlementMode,
-): SettlementMode => {
+export const settlementModeFor = (provider: BillingProvider, preferred?: SettlementMode): SettlementMode => {
   if (preferred !== undefined) {
     assertSettlementMode(provider, preferred);
     return preferred;
@@ -94,10 +82,7 @@ export const canCreateSubscriptions = (
  * never landed", and the recovery path creates a second customer for a subject
  * that already has one.
  */
-export const canFindCustomer = (
-  capabilities: ProviderCapabilities,
-  ref: { key: string; email?: string },
-): boolean =>
+export const canFindCustomer = (capabilities: ProviderCapabilities, ref: { key: string; email?: string }): boolean =>
   capabilities.customerLookup.includes('key') ||
   (capabilities.customerLookup.includes('email') && ref.email !== undefined);
 
@@ -110,10 +95,8 @@ export const canFindCustomer = (
  * Absorbing the gap silently is how a rounding difference becomes a reconciled
  * ledger that is quietly wrong.
  */
-export const ourAmountIsAuthoritative = (
-  capabilities: ProviderCapabilities,
-  mode: SettlementMode,
-): boolean => !capabilities.merchantOfRecord && mode === 'lines';
+export const ourAmountIsAuthoritative = (capabilities: ProviderCapabilities, mode: SettlementMode): boolean =>
+  !capabilities.merchantOfRecord && mode === 'lines';
 
 /**
  * Whether a settled period may post cash to the ledger on the strength of the
@@ -123,8 +106,7 @@ export const ourAmountIsAuthoritative = (
  * there records money that has not arrived, and the error is invisible until
  * someone compares the ledger to a bank statement.
  */
-export const settlementPostsCash = (capabilities: ProviderCapabilities): boolean =>
-  capabilities.capturesPayment;
+export const settlementPostsCash = (capabilities: ProviderCapabilities): boolean => capabilities.capturesPayment;
 
 /**
  * Whether tax on a settlement is ours to account for.
@@ -132,5 +114,4 @@ export const settlementPostsCash = (capabilities: ProviderCapabilities): boolean
  * A merchant of record collects and remits its own tax. Folding it into our
  * revenue overstates income and creates a liability we do not owe.
  */
-export const taxIsOurs = (capabilities: ProviderCapabilities): boolean =>
-  !capabilities.merchantOfRecord;
+export const taxIsOurs = (capabilities: ProviderCapabilities): boolean => !capabilities.merchantOfRecord;

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { BillingError } from '../src/errors';
-import { Money, Quantity, Rate, price, priceTiered } from '../src/money';
+import { Money, price, priceTiered, Quantity, Rate } from '../src/money';
 
 const q = (n: bigint) => Quantity.fromBigInt(n);
 const rate = (v: string) => Rate.fromDecimalString(v);
@@ -100,12 +100,18 @@ describe('rounding happens once, over the whole price', () => {
 
 describe('invalid tiers are refused, not guessed', () => {
   it('rejects an empty tier list', () => {
-    assert.throws(() => priceTiered(q(1n), [], 'volume', 'USD'), (e) => BillingError.hasCode(e, 'invalid_tiers'));
+    assert.throws(
+      () => priceTiered(q(1n), [], 'volume', 'USD'),
+      (e) => BillingError.hasCode(e, 'invalid_tiers'),
+    );
   });
 
   it('rejects a bounded last tier (a forgotten upTo: null)', () => {
     const bounded = [{ upTo: q(10n), rate: rate('1') }];
-    assert.throws(() => priceTiered(q(1n), bounded, 'graduated', 'USD'), (e) => BillingError.hasCode(e, 'invalid_tiers'));
+    assert.throws(
+      () => priceTiered(q(1n), bounded, 'graduated', 'USD'),
+      (e) => BillingError.hasCode(e, 'invalid_tiers'),
+    );
   });
 
   it('rejects non-ascending boundaries', () => {
@@ -114,12 +120,18 @@ describe('invalid tiers are refused, not guessed', () => {
       { upTo: q(5n), rate: rate('1') },
       { upTo: null, rate: rate('1') },
     ];
-    assert.throws(() => priceTiered(q(1n), bad, 'graduated', 'USD'), (e) => BillingError.hasCode(e, 'invalid_tiers'));
+    assert.throws(
+      () => priceTiered(q(1n), bad, 'graduated', 'USD'),
+      (e) => BillingError.hasCode(e, 'invalid_tiers'),
+    );
   });
 
   it('rejects a negative quantity', () => {
     const neg = Quantity.fromDecimalString('-1');
-    assert.throws(() => priceTiered(neg, stepped, 'graduated', 'USD'), (e) => BillingError.hasCode(e, 'invalid_tiers'));
+    assert.throws(
+      () => priceTiered(neg, stepped, 'graduated', 'USD'),
+      (e) => BillingError.hasCode(e, 'invalid_tiers'),
+    );
   });
 
   it('rejects a flat in the wrong currency', () => {
@@ -127,6 +139,9 @@ describe('invalid tiers are refused, not guessed', () => {
       { upTo: q(10n), rate: rate('1'), flat: Money.fromDecimalString('1.00', 'EUR') },
       { upTo: null, rate: rate('1') },
     ];
-    assert.throws(() => priceTiered(q(1n), mixed, 'graduated', 'USD'), (e) => BillingError.hasCode(e, 'currency_mismatch'));
+    assert.throws(
+      () => priceTiered(q(1n), mixed, 'graduated', 'USD'),
+      (e) => BillingError.hasCode(e, 'currency_mismatch'),
+    );
   });
 });

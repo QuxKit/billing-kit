@@ -8,8 +8,8 @@ import { describe, it } from 'node:test';
 
 import { BillingError } from '../src/errors';
 import { Money, Quantity, Rate } from '../src/money';
-import { addInterval, chargeForPeriod, daysInPeriod, definePlan } from '../src/subscriptions/plan.ts';
 import { applyDiscount, discountForPeriod } from '../src/subscriptions/discount.ts';
+import { addInterval, chargeForPeriod, daysInPeriod, definePlan } from '../src/subscriptions/plan.ts';
 
 const usd = (v: string) => Money.fromDecimalString(v, 'USD');
 
@@ -41,7 +41,7 @@ describe('chargeForPeriod', () => {
       c.lines.map((l) => l.kind),
       ['flat', 'seats', 'usage'],
     );
-    assert.equal(c.lines.find((l) => l.kind === 'usage')!.amount.minor, 60n);
+    assert.equal(c.lines.find((l) => l.kind === 'usage')?.amount.minor, 60n);
   });
 
   it('does not charge below the included allowance', () => {
@@ -67,7 +67,10 @@ describe('chargeForPeriod', () => {
       trial: true,
     });
     assert.equal(c.total.minor, 60n);
-    assert.deepEqual(c.lines.map((l) => l.kind), ['usage']);
+    assert.deepEqual(
+      c.lines.map((l) => l.kind),
+      ['usage'],
+    );
   });
 
   it('prorates base and seats, never usage', () => {
@@ -160,7 +163,8 @@ describe('discounts and coupons', () => {
     });
     // 7960 subtotal − 1592 = 6368
     assert.equal(c.total.minor, 6368n);
-    const line = c.lines.find((l) => l.kind === 'discount')!;
+    const line = c.lines.find((l) => l.kind === 'discount');
+    assert.ok(line);
     assert.equal(line.amount.minor, -1592n);
   });
 

@@ -165,7 +165,7 @@ function assertSameLegs(posting: LedgerPosting, existing: readonly LedgerEntry[]
   // insert assigns from the array index — so position is meaningful and two
   // legs cannot be matched to each other by accident.
   for (const [i, leg] of posting.legs.entries()) {
-    const was = existing[i]!;
+    const was = existing[i];
     if (was.subjectId !== leg.subjectId) {
       conflict(`leg ${i} was for subject ${was.subjectId}, this call sent ${leg.subjectId}`);
     }
@@ -318,6 +318,15 @@ export interface EntriesQuery {
 const ENTRIES_PAGE = 1000;
 
 /**
+ * The hard bound on what one `entries()` call will return, explicit `limit` or
+ * not. Not a silent cap — the old 500 was, and A6 in the adversarial suite is
+ * the record of what that cost. Crossing it throws `result_too_large`, so a
+ * caller learns to narrow with `since`/`until` or page with `limit` instead of
+ * getting a short answer that looks complete.
+ */
+export const ENTRIES_MAX_ROWS = 100_000;
+
+/**
  * Read entries back, oldest first. Never mutates; there is no path that does.
  *
  * An explicit `limit` is a page the caller asked for, and is returned as-is. No
@@ -330,9 +339,18 @@ const ENTRIES_PAGE = 1000;
  * So the unbounded read pages to the end with a keyset cursor over the sort key
  * (posted_at, transaction_id, leg_no). Keyset, not OFFSET: OFFSET rescans the
  * skipped rows every page and drifts if a row is inserted mid-walk, and the
- * ledger is append-only so the cursor is stable.
+ * ledger is append-only so the cursor is stable. It stops — with an error, not
+ * a truncated array — at `ENTRIES_MAX_ROWS`.
  */
 export async function entries(db: SqlExecutor, q: EntriesQuery): Promise<LedgerEntry[]> {
+  if (q.limit !== undefined && (!Number.isInteger(q.limit) || q.limit < 0 || q.limit > ENTRIES_MAX_ROWS)) {
+    throw new BillingError({
+      code: 'result_too_large',
+      what: 'ledger_entries',
+      max: ENTRIES_MAX_ROWS,
+      requested: q.limit,
+    });
+  }
   const select = `SELECT id, transaction_id, tenant_id, subject_id, account, currency,
             amount_minor::text AS amount_minor, leg_no, source_kind, source_id, posted_at, memo
        FROM billing.ledger_entries
@@ -364,13 +382,22 @@ export async function entries(db: SqlExecutor, q: EntriesQuery): Promise<LedgerE
        ORDER BY posted_at, transaction_id, leg_no
        LIMIT ${ENTRIES_PAGE}`,
       [
-        q.tenantId, q.subjectId, q.account ?? null, q.since ?? null, q.until ?? null,
-        cursor?.postedAt ?? null, cursor?.txId ?? null, cursor?.legNo ?? null,
+        q.tenantId,
+        q.subjectId,
+        q.account ?? null,
+        q.since ?? null,
+        q.until ?? null,
+        cursor?.postedAt ?? null,
+        cursor?.txId ?? null,
+        cursor?.legNo ?? null,
       ],
     );
     for (const row of rows) all.push(toEntry(row));
     if (rows.length < ENTRIES_PAGE) return all;
-    const last: EntryRow = rows[rows.length - 1]!;
+    if (all.length >= ENTRIES_MAX_ROWS) {
+      throw new BillingError({ code: 'result_too_large', what: 'ledger_entries', max: ENTRIES_MAX_ROWS });
+    }
+    const last: EntryRow = rows[rows.length - 1];
     cursor = { postedAt: last.posted_at, txId: last.transaction_id, legNo: last.leg_no };
   }
 }

@@ -6,24 +6,35 @@
 // library does the rest.
 //
 // What is NOT here, on purpose and for the same reason metering's `drain` is a
-// function and not an endpoint: no schedule, no HTTP, no lease held across the
-// work. The trigger — every minute, every night — and the authentication of
-// that trigger belong to the host. In this stack that host is `ezy_cron` calling
-// an endpoint that calls this function.
+// function and not an endpoint: no schedule, no HTTP. The trigger — every
+// minute, every night — and the authentication of that trigger belong to the
+// host. In this stack that host is `ezy_cron` calling an endpoint that calls
+// this function.
 //
-// Concurrency safety comes from idempotency, not a lock. `chargeSubscriptionPeriod`
-// dedupes on the ledger charge_id, the period row and a guarded advance, so two
-// workers (or an overlapping cron) that both pick up the same due subscription
-// charge it exactly once. A row lock spanning the charge could not be held
-// anyway — the ledger post runs on a different pool connection — so, exactly as
-// sql/013_runs.sql argues for the drain lease, a guard that cannot actually
-// exclude anything is not shipped as though it does.
+// Correctness under overlap rests on idempotency, and on two locks that make the
+// overlap cheap rather than merely survivable:
+//
+//   - a per-run lease: a transaction-scoped advisory lock held for the whole
+//     sweep. A second sweep that fires while one is running returns at once
+//     with `leased: false` and does no work. It is a xact lock on a pinned
+//     connection, so unlike a session lock it cannot leak past the sweep.
+//   - a per-item lock: each due subscription is charged inside its own
+//     transaction, after `SELECT ... FOR UPDATE SKIP LOCKED` on its row. If the
+//     lease is disabled (single-connection executors) or two sweeps run under
+//     different lease keys, a row one of them holds is skipped by the other
+//     rather than charged twice or read stale.
+//
+// Even with both, `chargeSubscriptionPeriod` remains idempotent on the charge
+// id, the period row and the guarded advance, so a crash mid-item converges.
+//
+// Failures are retried with backoff before they land in `errors`: a transient
+// database hiccup on one row should not need a whole extra cron tick to heal.
 
 import { BillingError } from '../errors.ts';
 import type { Money, Quantity } from '../money.ts';
 import type { SqlExecutor, TenantId } from '../types.ts';
 import { chargeSubscriptionPeriod } from './settle.ts';
-import { toSubscription, type SubscriptionRow } from './store.ts';
+import { type SubscriptionRow, toSubscription } from './store.ts';
 import type { Plan, Subscription } from './types.ts';
 
 export interface DueQuery {
@@ -35,10 +46,11 @@ export interface DueQuery {
   limit?: number;
 }
 
-const SELECT = `SELECT id, tenant_id, subject_id, key, plan_id, currency, state, seats,
+const COLUMNS = `id, tenant_id, subject_id, key, plan_id, currency, state, seats,
        current_period_start, current_period_end, trial_end, started_at,
-       canceled_at, cancel_at_period_end
-  FROM billing.subscriptions`;
+       canceled_at, cancel_at_period_end`;
+
+const SELECT = `SELECT ${COLUMNS} FROM billing.subscriptions`;
 
 /**
  * The subscriptions whose current period has ended and are not canceled,
@@ -62,6 +74,15 @@ export async function dueSubscriptions(db: SqlExecutor, q: DueQuery = {}): Promi
   return rows.map(toSubscription);
 }
 
+export interface SweepRetry {
+  /** Extra attempts after the first failure. Default 2 (three tries in all). */
+  retries?: number;
+  /** Delay before the first retry; doubles each time. Default 100ms. */
+  backoffMs?: number;
+  /** Injectable for tests. Defaults to a real timer. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
 export interface SweepOptions extends DueQuery {
   /**
    * Resolve the plan a subscription references. Async so it can read a catalogue
@@ -79,6 +100,15 @@ export interface SweepOptions extends DueQuery {
     subscription: Subscription,
     period: { start: Date; end: Date },
   ) => Readonly<Record<string, Quantity>> | Promise<Readonly<Record<string, Quantity>>>;
+  /**
+   * The per-run lease. Default: on, keyed by tenant (or a global key when
+   * sweeping all tenants). Pass `false` to disable — required when the executor
+   * cannot hold a second connection open (a single-connection pool), since the
+   * lease is a transaction that stays open while items are charged on others.
+   */
+  lease?: { key?: string } | false;
+  /** Per-item retry policy. */
+  retry?: SweepRetry;
 }
 
 export interface SweepItem {
@@ -91,7 +121,18 @@ export interface SweepItem {
   posted: boolean;
 }
 
+export interface SweepError {
+  subscriptionId: string;
+  message: string;
+  /** The typed code, when the final failure was a BillingError. */
+  code?: string;
+  /** How many times this item was tried before being reported. */
+  attempts: number;
+}
+
 export interface SweepReport {
+  /** False when another sweep held the lease; nothing was looked at. */
+  leased: boolean;
   /** How many due subscriptions were looked at. */
   swept: number;
   /** How many produced a fresh charge (not a replay). */
@@ -99,9 +140,20 @@ export interface SweepReport {
   items: SweepItem[];
   /** Subscriptions whose plan did not resolve; left untouched. */
   skipped: string[];
-  /** Per-subscription failures; one bad row never halts the sweep. */
-  errors: { subscriptionId: string; message: string }[];
+  /**
+   * Due rows another worker held at the moment this sweep reached them
+   * (`FOR UPDATE SKIP LOCKED`), or that were no longer due by then. Not
+   * errors: they are being handled, or already were.
+   */
+  locked: string[];
+  /** Per-subscription failures after retries; one bad row never halts the sweep. */
+  errors: SweepError[];
 }
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** A stable int8 for pg_try_advisory_xact_lock, from the lease key. */
+const LEASE_SQL = `SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS got`;
 
 /**
  * Charge every subscription whose period has ended.
@@ -110,45 +162,112 @@ export interface SweepReport {
  * advanced one period here and picked up again by the next sweep, so a cron that
  * was down for a week catches up over the next few fires rather than doing an
  * unbounded amount of work in one. Each charge is idempotent, so re-running a
- * sweep — or running two at once — is safe.
+ * sweep — or running two at once — is safe; with the lease on, the second one
+ * simply reports `leased: false`.
  */
 export async function chargeDueSubscriptions(db: SqlExecutor, opts: SweepOptions): Promise<SweepReport> {
+  if (opts.lease === false) return sweep(db, opts);
+
+  const key = opts.lease?.key ?? `billing-kit:sweep:${opts.tenantId ?? '*'}`;
+  return db.transaction(async (lease) => {
+    const [row] = await lease.query<{ got: boolean }>(LEASE_SQL, [key]);
+    if (row === undefined || !row.got) {
+      return { leased: false, swept: 0, charged: 0, items: [], skipped: [], locked: [], errors: [] };
+    }
+    // The items are charged on `db` — other pool connections — while this
+    // transaction holds the lock. The lease connection does nothing else.
+    return sweep(db, opts);
+  });
+}
+
+async function sweep(db: SqlExecutor, opts: SweepOptions): Promise<SweepReport> {
   const now = opts.now ?? new Date();
   const due = await dueSubscriptions(db, { now, tenantId: opts.tenantId, limit: opts.limit });
 
-  const report: SweepReport = { swept: due.length, charged: 0, items: [], skipped: [], errors: [] };
+  const report: SweepReport = {
+    leased: true,
+    swept: due.length,
+    charged: 0,
+    items: [],
+    skipped: [],
+    locked: [],
+    errors: [],
+  };
 
-  for (const subscription of due) {
-    try {
-      const plan = await opts.plan(subscription.planId);
-      if (plan === undefined) {
-        report.skipped.push(subscription.id);
-        continue;
+  const retries = Math.max(0, opts.retry?.retries ?? 2);
+  const backoffMs = Math.max(0, opts.retry?.backoffMs ?? 100);
+  const sleep = opts.retry?.sleep ?? defaultSleep;
+
+  for (const candidate of due) {
+    let attempt = 0;
+    for (;;) {
+      attempt += 1;
+      try {
+        const outcome = await chargeOne(db, opts, candidate, now);
+        if (outcome.kind === 'skipped') report.skipped.push(candidate.id);
+        else if (outcome.kind === 'locked') report.locked.push(candidate.id);
+        else {
+          report.items.push(outcome.item);
+          if (outcome.item.charged) report.charged += 1;
+        }
+        break;
+      } catch (error) {
+        if (attempt <= retries) {
+          await sleep(backoffMs * 2 ** (attempt - 1));
+          continue;
+        }
+        report.errors.push({
+          subscriptionId: candidate.id,
+          message: BillingError.is(error) ? error.message : String(error),
+          code: BillingError.is(error) ? error.code : undefined,
+          attempts: attempt,
+        });
+        break;
       }
+    }
+  }
 
-      const usage = opts.usageFor
-        ? await opts.usageFor(subscription, {
-            start: subscription.currentPeriodStart,
-            end: subscription.currentPeriodEnd,
-          })
-        : undefined;
+  return report;
+}
 
-      const result = await chargeSubscriptionPeriod(db, { plan, subscription, usage, now });
-      report.items.push({
+type Outcome = { kind: 'skipped' } | { kind: 'locked' } | { kind: 'charged'; item: SweepItem };
+
+/**
+ * One item, in one transaction: lock the row (skipping it if another worker
+ * has it), re-check it is still due, and charge it on the pinned connection so
+ * the ledger post, the period row and the advance commit or roll back together.
+ */
+async function chargeOne(db: SqlExecutor, opts: SweepOptions, candidate: Subscription, now: Date): Promise<Outcome> {
+  return db.transaction(async (tx) => {
+    const rows = await tx.query<SubscriptionRow>(
+      `${SELECT} WHERE tenant_id = $1 AND id = $2 AND state <> 'canceled' AND current_period_end <= $3
+       FOR UPDATE SKIP LOCKED`,
+      [candidate.tenantId, candidate.id, now],
+    );
+    const row = rows[0];
+    if (row === undefined) return { kind: 'locked' };
+    const subscription = toSubscription(row);
+
+    const plan = await opts.plan(subscription.planId);
+    if (plan === undefined) return { kind: 'skipped' };
+
+    const usage = opts.usageFor
+      ? await opts.usageFor(subscription, {
+          start: subscription.currentPeriodStart,
+          end: subscription.currentPeriodEnd,
+        })
+      : undefined;
+
+    const result = await chargeSubscriptionPeriod(tx, { plan, subscription, usage, now });
+    return {
+      kind: 'charged',
+      item: {
         subscriptionId: subscription.id,
         chargeId: result.chargeId,
         total: result.charge.total,
         charged: !result.deduplicated,
         posted: result.transaction !== null,
-      });
-      if (!result.deduplicated) report.charged += 1;
-    } catch (error) {
-      report.errors.push({
-        subscriptionId: subscription.id,
-        message: BillingError.is(error) ? error.message : String(error),
-      });
-    }
-  }
-
-  return report;
+      },
+    };
+  });
 }

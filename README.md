@@ -25,7 +25,7 @@ Usage-based billing as a library, over a provider you choose.
                                   ┌──────────────────────────┐
                                   │  invoice + capture       │
                                   │  webhook                 │
-                                  │  Stripe · Paddle · Lago  │
+                                  │  Stripe · Paddle         │
                                   └──────────────────────────┘
 
  billing-kit owns everything left of `settle`. The provider owns
@@ -36,7 +36,9 @@ _Rendered diagrams (mermaid): [docs/DIAGRAMS.md](https://github.com/QuxKit/billi
 
 billing-kit owns everything left of `settle` — the framed boxes. The provider owns
 everything right of it. That line is the whole design, and it sits there because
-it is the only place Stripe, Paddle and Lago agree on what an operation means.
+it is the only place Stripe and Paddle agree on what an operation means. Those
+two ship in this package; further providers are planned via
+[`@quxkit/billing-kit-adapters`](https://github.com/QuxKit/billing-kit-adapters).
 
 Apache-2.0, so that both an AGPL open core and a commercial hosted service can
 depend on it.
@@ -195,6 +197,28 @@ residue with no row explaining the gap.
 Wire format everywhere is `{ "amount": "1999", "currency": "USD" }` — a string,
 in minor units. A decimal string would re-raise the question of how many places
 the currency has, which the currency tag already answers.
+
+## Quickstart
+
+```
+pnpm add @quxkit/billing-kit pg
+psql -d "$DATABASE" -f node_modules/@quxkit/billing-kit/sql/001_core.sql   # or: npx billing-kit migrate
+```
+
+```ts
+import pg from 'pg';
+import { createBilling } from '@quxkit/billing-kit';
+import { pgExecutor } from '@quxkit/billing-kit/pg';
+
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const db = pgExecutor(pool);            // the shipped SqlExecutor over pg.Pool
+const billing = createBilling({ db });   // once, at startup
+```
+
+`@quxkit/billing-kit/pg` is the only place the library touches `pg`, which is
+an optional peer dependency: import the root without it and nothing loads the
+driver. A runnable version of this is in
+[`examples/quickstart`](examples/quickstart).
 
 ## Ingest
 
@@ -401,8 +425,18 @@ import { chargeDueSubscriptions } from '@quxkit/billing-kit/subscriptions';
 const report = await chargeDueSubscriptions(db, {
   plan: (id) => PLANS[id],                              // your code catalogue
   usageFor: (sub, period) => meterUsage(db, sub, period), // omit for flat plans
-});                                                     // { swept, charged, skipped, errors }
+});                    // { leased, swept, charged, items, skipped, locked, errors }
 ```
+
+Two sweeps that overlap do not fight. The sweep holds a **per-run lease** — a
+transaction-scoped advisory lock, keyed by tenant — for as long as it runs, so a
+second fire returns `{ leased: false }` at once; pass `lease: false` on an
+executor that cannot hold a second connection open. Each due row is then
+charged in its own transaction after `FOR UPDATE SKIP LOCKED`, so a row another
+worker holds is reported under `locked` rather than charged twice, and a charge
+that fails is **retried with backoff** (`retry: { retries, backoffMs }`, default
+two retries from 100 ms) before it lands in `errors` with its `attempts` count —
+and its row stays due for the next fire.
 
 ## Discounts, credit notes and wallets
 
@@ -436,8 +470,9 @@ export interface SqlExecutor {
 
 That is the whole database dependency. Prisma is the house tool for schema and
 migrations, but the engine is raw SQL, so the runtime takes a narrow executor
-and a bare `pg.Pool` satisfies it. `test/pg-executor.ts` is that adapter, and it
-is about thirty lines including the transaction pinning.
+and a bare `pg.Pool` satisfies it. `pgExecutor` from `@quxkit/billing-kit/pg`
+is that adapter — about thirty lines including the transaction pinning — and the
+test suite runs on the same one it ships.
 
 Apply `sql/001_core.sql`, then create partitions ahead:
 
@@ -519,6 +554,25 @@ function and never ran it, and a freshly migrated database had no partitions at
 all: every insert failed with *no partition of relation* until somebody knew to
 call it by hand.
 
+## Errors
+
+`BillingError` carries `failure`, a discriminated union on `code`; the message is
+generated from it and is never parsed. `BillingError.hasCode(e, 'idempotency_conflict')`
+narrows. The codes, by where they come from:
+
+| Area | Codes |
+|---|---|
+| Money | `unknown_currency`, `currency_mismatch`, `invalid_decimal`, `precision_loss`, `invalid_allocation`, `invalid_tiers`, `invalid_plan`, `invalid_subscription` |
+| Ingest | `invalid_event`, `idempotency_conflict`, `dedupe_unresolved`, `batch_too_large` (`recordMany` above `RECORD_MANY_MAX` = 1,000 events) |
+| Reads | `window_invalid`, `result_too_large` (`entries()` asked for, or walking past, `ENTRIES_MAX_ROWS` = 100,000 rows — narrow with `since`/`until` or page with `limit`) |
+| Ledger | `unbalanced_transaction` |
+| General | `not_found`, `provider_error` |
+
+Every code in the table is raised somewhere. Three that used to be in the union
+and were not — `window_sealed`, `ledger_immutable`, `account_currency_mismatch` —
+were removed rather than left as promises; window sealing is not implemented,
+and the ledger's append-only guarantee is a trigger, not a TypeScript error.
+
 ## Design rules
 
 1. No middleware is exported. Middleware is a framework's shape and there are
@@ -537,9 +591,11 @@ call it by hand.
 
 ```
 pnpm install
+pnpm lint                  # biome
 pnpm typecheck
-pnpm run test:unit         # the shipped suite
-pnpm run test:adversarial  # the probes that found A2/A4/A5/A8 — keep them green
+pnpm test                  # builds, then every suite: unit, adversarial, providers, metering
+pnpm run test:coverage     # the same under c8 (thresholds in .c8rc.json)
+pnpm run test:adversarial  # just the probes that found A2/A4/A5/A8 — keep them green
 pnpm build                 # dist/, ESM + CJS + declarations
 pnpm run test:pack         # packs, installs the tarball, drives it with plain node
 ```
@@ -558,7 +614,8 @@ createdb billing_kit_test
 pnpm test
 ```
 
-Point them elsewhere with `BILLING_KIT_TEST_DATABASE_URL`. They run against a
+Point them elsewhere with `BILLING_KIT_TEST_DATABASE_URL`. Set `REQUIRE_DB=1`
+(CI does) to turn "no database" from a skip into a failure. They run against a
 real database rather than a mock because the behaviour worth testing — what
 `ON CONFLICT DO UPDATE` does under a concurrent transaction, whether a deferred
 trigger fires at the right moment, whether a partitioned table routes a row — is

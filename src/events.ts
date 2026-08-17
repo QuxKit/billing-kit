@@ -262,13 +262,9 @@ function batchKey(event: UsageEvent): string {
   // A separator alone makes them the same, and the collision would drop a real
   // event as a duplicate of an unrelated one.
   const part = (s: string): string => `${s.length}:${s}`;
-  return [
-    part(event.tenantId),
-    part(event.source),
-    part(event.subjectId),
-    part(event.metric),
-    event.externalId,
-  ].join('|');
+  return [part(event.tenantId), part(event.source), part(event.subjectId), part(event.metric), event.externalId].join(
+    '|',
+  );
 }
 
 /**
@@ -289,11 +285,22 @@ function batchKey(event: UsageEvent): string {
  *    answer this returns. If profiling ever makes that trade worth it, the
  *    staging-table version belongs behind this same signature.
  */
-export async function recordMany(
-  db: SqlExecutor,
-  events: readonly UsageEvent[],
-  now: Date,
-): Promise<RecordedEvent[]> {
+/**
+ * The most events one `recordMany` call accepts. Above this the arrays bound
+ * to the multi-row INSERT stop being a batch and start being a memory and
+ * lock-time problem; a caller with more splits into calls of this size.
+ */
+export const RECORD_MANY_MAX = 1_000;
+
+export async function recordMany(db: SqlExecutor, events: readonly UsageEvent[], now: Date): Promise<RecordedEvent[]> {
+  if (events.length > RECORD_MANY_MAX) {
+    throw new BillingError({
+      code: 'batch_too_large',
+      operation: 'recordMany',
+      size: events.length,
+      max: RECORD_MANY_MAX,
+    });
+  }
   for (const event of events) validateEvent(event, now);
   if (events.length === 0) return [];
 
@@ -309,7 +316,10 @@ export async function recordMany(
     unique.push(event);
     uniqueIds.push(randomUUID());
   }
-  for (const event of events) originIndex.push(firstIndexByKey.get(batchKey(event))!);
+  for (const event of events) {
+    // biome-ignore lint/style/noNonNullAssertion: every key was set by the loop above
+    originIndex.push(firstIndexByKey.get(batchKey(event))!);
+  }
 
   const claims = await db.transaction(async (tx) => {
     const rows = await tx.query<ClaimRow & { ord: number }>(
@@ -352,7 +362,7 @@ export async function recordMany(
     for (let i = 0; i < unique.length; i++) {
       const row = byOrd.get(i + 1);
       if (row === undefined) {
-        const event = unique[i]!;
+        const event = unique[i];
         throw new BillingError({
           code: 'dedupe_unresolved',
           source: event.source,
@@ -360,10 +370,10 @@ export async function recordMany(
         });
       }
       if (row.inserted) {
-        fresh.push(unique[i]!);
-        freshIds.push(uniqueIds[i]!);
+        fresh.push(unique[i]);
+        freshIds.push(uniqueIds[i]);
       } else {
-        replayed.push([unique[i]!, row]);
+        replayed.push([unique[i], row]);
       }
     }
 
@@ -410,8 +420,17 @@ export async function recordMany(
   // one call is a duplicate for the same reason a second call would be.
   const alreadyReported = new Set<number>();
   return events.map((_event, i) => {
-    const canonical = originIndex[i]!;
-    const claim = claims.get(canonical + 1)!;
+    const canonical = originIndex[i];
+    const claim = claims.get(canonical + 1);
+    if (claim === undefined) {
+      // The claim CTE returns one row per unique event; a missing one is a
+      // broken invariant, not a condition the caller can act on.
+      throw new BillingError({
+        code: 'dedupe_unresolved',
+        source: events[i].source,
+        externalId: events[i].externalId,
+      });
+    }
     const firstHere = !alreadyReported.has(canonical);
     alreadyReported.add(canonical);
     return {

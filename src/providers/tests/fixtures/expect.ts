@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict';
 
-import { ProviderError, isProviderError } from '../../errors';
+import { isProviderError, type ProviderError } from '../../errors';
 
 export const expectProviderError = async (
   fn: () => Promise<unknown>,
