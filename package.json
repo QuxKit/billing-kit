@@ -1,5 +1,5 @@
 {
-  "name": "billing-kit",
+  "name": "@quxkit/billing-kit",
   "version": "0.1.0",
   "description": "Usage-based billing as a library, over a provider you choose.",
   "license": "Apache-2.0",
@@ -8,11 +8,11 @@
   "sideEffects": false,
   "repository": {
     "type": "git",
-    "url": "git+http://localhost:3003/brett/billing-kit.git"
+    "url": "git+https://github.com/QuxKit/billing-kit.git"
   },
-  "homepage": "http://localhost:3003/brett/billing-kit#readme",
+  "homepage": "https://github.com/QuxKit/billing-kit#readme",
   "bugs": {
-    "url": "http://localhost:3003/brett/billing-kit/issues"
+    "url": "https://github.com/QuxKit/billing-kit/issues"
   },
   "keywords": [
     "billing",
@@ -92,7 +92,7 @@
     "prepublishOnly": "pnpm run build && pnpm test && pnpm run typecheck && pnpm run test:pack"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "restricted"
   },
   "peerDependencies": {
     "pg": "^8.11.0"

@@ -60,8 +60,14 @@ before(() => {
   run('pnpm', ['run', 'build'], repo);
 
   const packed = mkdtempSync(path.join(tmpdir(), 'billing-kit-tarball-'));
-  const out = run('npm', ['pack', '--pack-destination', packed, '--loglevel', 'error'], repo);
-  tarball = path.join(packed, out.trim().split('\n').at(-1)!.trim());
+  run('npm', ['pack', '--pack-destination', packed, '--loglevel', 'error'], repo);
+  // Read the actual tarball from the pack destination rather than parsing
+  // `npm pack`'s stdout — its output format is not stable across npm versions,
+  // and the scoped name (`@quxkit/billing-kit` -> `quxkit-billing-kit-*.tgz`)
+  // is exactly the kind of thing that breaks a filename guessed from stdout.
+  const produced = readdirSync(packed).find((f) => f.endsWith('.tgz'));
+  if (!produced) throw new Error(`npm pack produced no .tgz in ${packed}`);
+  tarball = path.join(packed, produced);
 
   // A consumer package that is not a workspace member and shares no
   // node_modules with the repo. `private` so a stray publish is impossible.
@@ -113,7 +119,7 @@ test('the tarball contains the built artifacts and none of the source', () => {
 });
 
 test('every path named in the exports map exists in the installed package', () => {
-  const installed = path.join(consumer, 'node_modules', 'billing-kit');
+  const installed = path.join(consumer, 'node_modules', '@quxkit', 'billing-kit');
   const manifest = JSON.parse(readFileSync(path.join(installed, 'package.json'), 'utf8')) as {
     exports: Record<string, unknown>;
   };
@@ -146,9 +152,9 @@ test('ESM: the root and both subpaths import and work', () => {
     `
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { Money, Quantity, BillingError } from 'billing-kit';
-import { createStripeProvider, createPaddleProvider } from 'billing-kit/providers';
-import { drain, meterBatch } from 'billing-kit/metering';
+import { Money, Quantity, BillingError } from '@quxkit/billing-kit';
+import { createStripeProvider, createPaddleProvider } from '@quxkit/billing-kit/providers';
+import { drain, meterBatch } from '@quxkit/billing-kit/metering';
 
 // Not just a truthy import check — the value has to behave. A build that
 // emitted an empty module would satisfy 'typeof === function' and nothing else.
@@ -163,11 +169,11 @@ for (const fn of [createStripeProvider, createPaddleProvider, drain, meterBatch]
 
 // The ./sql/* subpath, resolved by Node rather than by joining paths ourselves.
 const require = createRequire(import.meta.url);
-const core = require.resolve('billing-kit/sql/001_core.sql');
+const core = require.resolve('@quxkit/billing-kit/sql/001_core.sql');
 assert.match(require('node:fs').readFileSync(core, 'utf8'), /create schema|CREATE SCHEMA/i);
 
 // Encapsulation: the exports map must not leak internals.
-assert.throws(() => require.resolve('billing-kit/src/money.ts'), /ERR_PACKAGE_PATH_NOT_EXPORTED|Cannot find/);
+assert.throws(() => require.resolve('@quxkit/billing-kit/src/money.ts'), /ERR_PACKAGE_PATH_NOT_EXPORTED|Cannot find/);
 
 console.log('esm ok');
 `,
@@ -177,22 +183,22 @@ console.log('esm ok');
 
 test('CJS: the root and both subpaths require and work', () => {
   // The condition the old package.json could not serve at all: it pointed
-  // `.` at a .ts file, so `require('billing-kit')` had nothing to load.
+  // `.` at a .ts file, so `require('@quxkit/billing-kit')` had nothing to load.
   const file = path.join(consumer, 'use.cjs');
   writeFileSync(
     file,
     `
 const assert = require('node:assert/strict');
-const { Money, BillingError } = require('billing-kit');
-const { createStripeProvider } = require('billing-kit/providers');
-const { drain } = require('billing-kit/metering');
+const { Money, BillingError } = require('@quxkit/billing-kit');
+const { createStripeProvider } = require('@quxkit/billing-kit/providers');
+const { drain } = require('@quxkit/billing-kit/metering');
 
 assert.equal(Money.fromMinor(500n, 'EUR').toString(), '5.00 EUR');
 assert.equal(typeof BillingError, 'function');
 assert.equal(typeof createStripeProvider, 'function');
 assert.equal(typeof drain, 'function');
 
-const sql = require('node:fs').readFileSync(require.resolve('billing-kit/sql/010_metering.sql'), 'utf8');
+const sql = require('node:fs').readFileSync(require.resolve('@quxkit/billing-kit/sql/010_metering.sql'), 'utf8');
 assert.ok(sql.length > 0);
 
 console.log('cjs ok');
@@ -242,11 +248,11 @@ type IsAny<T> = 0 extends 1 & T ? true : false;
   writeFileSync(
     path.join(dir, 'consumer.mts'),
     `${preamble}
-import { Money, Quantity, Rate, price } from 'billing-kit';
-import type { MoneyJSON, PricedAmount, SqlExecutor } from 'billing-kit';
-import { createStripeProvider } from 'billing-kit/providers';
-import { drain } from 'billing-kit/metering';
-import type { DrainReport } from 'billing-kit/metering';
+import { Money, Quantity, Rate, price } from '@quxkit/billing-kit';
+import type { MoneyJSON, PricedAmount, SqlExecutor } from '@quxkit/billing-kit';
+import { createStripeProvider } from '@quxkit/billing-kit/providers';
+import { drain } from '@quxkit/billing-kit/metering';
+import type { DrainReport } from '@quxkit/billing-kit/metering';
 
 const amount: Money = Money.fromMinor(1n, 'USD');
 const json: MoneyJSON = amount.toJSON();
@@ -265,10 +271,10 @@ export { json, priced, report, stripeIsTyped, moneyIsTyped };
   writeFileSync(
     path.join(dir, 'consumer.cts'),
     `${preamble}
-import { Money } from 'billing-kit';
-import type { MoneyJSON } from 'billing-kit';
-import { createPaddleProvider } from 'billing-kit/providers';
-import type { DrainOptions } from 'billing-kit/metering';
+import { Money } from '@quxkit/billing-kit';
+import type { MoneyJSON } from '@quxkit/billing-kit';
+import { createPaddleProvider } from '@quxkit/billing-kit/providers';
+import type { DrainOptions } from '@quxkit/billing-kit/metering';
 
 const amount: Money = Money.fromMinor(250n, 'GBP');
 const json: MoneyJSON = amount.toJSON();
