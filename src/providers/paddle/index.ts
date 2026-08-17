@@ -35,7 +35,7 @@
 // Validate against a sandbox before release.
 
 import { asWholeQuantity, optionalMoneyFromMinorString } from '../amounts';
-import { ProviderError, isProviderError } from '../errors';
+import { isProviderError, ProviderError } from '../errors';
 import { createHttpClient, type FetchLike, type HttpClient } from '../http';
 import { singleHeader, verifyTimestampedHmac } from '../signature';
 import type {
@@ -62,7 +62,7 @@ import type {
   SubscriptionStatus,
   VerifiedEvent,
 } from '../types';
-import { normalisePaddleEvent, object, str, PADDLE } from './events';
+import { normalisePaddleEvent, object, PADDLE, str } from './events';
 
 /**
  * Paddle's capabilities.
@@ -216,8 +216,7 @@ export const createPaddleProvider = (config: PaddleConfig): BillingProvider<Padd
   const toSubscription = (raw: unknown): ProviderSubscription => {
     const record = object(raw);
     const period = record['current_billing_period'];
-    const bounds =
-      typeof period === 'object' && period !== null ? (period as Record<string, unknown>) : null;
+    const bounds = typeof period === 'object' && period !== null ? (period as Record<string, unknown>) : null;
     return {
       id: str(record['id'], 'subscription.id') as ProviderSubscriptionId,
       status: subscriptionStatus(record['status']),
@@ -334,10 +333,7 @@ export const createPaddleProvider = (config: PaddleConfig): BillingProvider<Padd
   // completing a checkout, not by us calling an endpoint, and the capability
   // says so: `createsSubscriptions: false` removes the method from the type.
 
-  const cancelSubscription = async (
-    id: ProviderSubscriptionId,
-    at: CancelAt,
-  ): Promise<ProviderSubscription> => {
+  const cancelSubscription = async (id: ProviderSubscriptionId, at: CancelAt): Promise<ProviderSubscription> => {
     const raw = await http.request<unknown>({
       method: 'POST',
       path: `/subscriptions/${id}/cancel`,
@@ -347,10 +343,7 @@ export const createPaddleProvider = (config: PaddleConfig): BillingProvider<Padd
     return toSubscription(dataOf(raw));
   };
 
-  const resolveItem = async (
-    subscriptionId: ProviderSubscriptionId,
-    metric: string,
-  ): Promise<ProviderItem | null> => {
+  const resolveItem = async (subscriptionId: ProviderSubscriptionId, metric: string): Promise<ProviderItem | null> => {
     const raw = await http.request<unknown>({
       method: 'GET',
       path: `/subscriptions/${subscriptionId}`,
@@ -447,9 +440,7 @@ export const createPaddleProvider = (config: PaddleConfig): BillingProvider<Padd
     let items: unknown;
     if (input.amount !== null) {
       const transaction = object(
-        dataOf(
-          await http.request<unknown>({ method: 'GET', path: `/transactions/${input.settlementRef}` }),
-        ),
+        dataOf(await http.request<unknown>({ method: 'GET', path: `/transactions/${input.settlementRef}` })),
       );
       const lines = transaction['items'];
       if (!Array.isArray(lines) || lines.length !== 1) {

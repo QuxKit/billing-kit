@@ -63,10 +63,7 @@ export const singleHeader = (
  * a secret roll the provider sends both digests under the same key and the
  * caller must accept either.
  */
-export const parseSignatureHeader = (
-  header: string,
-  pairSeparator: string,
-): Map<string, string[]> => {
+export const parseSignatureHeader = (header: string, pairSeparator: string): Map<string, string[]> => {
   const out = new Map<string, string[]>();
   if (header.length > MAX_HEADER_BYTES) return out;
   for (const part of header.split(pairSeparator)) {

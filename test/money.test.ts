@@ -10,15 +10,15 @@ import { describe, it } from 'node:test';
 
 import { BillingError } from '../src/errors';
 import {
-  DECIMAL_SCALE,
-  Money,
-  Quantity,
-  Rate,
   allocate,
   currencyExponent,
+  DECIMAL_SCALE,
   isKnownCurrency,
   knownCurrencies,
+  Money,
   price,
+  Quantity,
+  Rate,
 } from '../src/money';
 
 const usd = (v: string) => Money.fromDecimalString(v, 'USD');
@@ -160,12 +160,17 @@ describe('Money arithmetic', () => {
     const x = 0.1;
     const y = 0.2;
     const z = 0.3;
-    assert.notEqual((x + y) + z, x + (y + z));
+    assert.notEqual(x + y + z, x + (y + z));
 
     const a = Money.fromDecimalString('0.10', 'USD');
     const b = Money.fromDecimalString('0.20', 'USD');
     const c = Money.fromDecimalString('0.30', 'USD');
-    assert.ok(a.plus(b).plus(c).equals(a.plus(b.plus(c))));
+    assert.ok(
+      a
+        .plus(b)
+        .plus(c)
+        .equals(a.plus(b.plus(c))),
+    );
     assert.ok(Money.sum([a, b, c], 'USD').equals(Money.sum([c, b, a], 'USD')));
   });
 
@@ -296,7 +301,10 @@ describe('price: the single rounding site', () => {
     const perEvent = Array.from({ length: 1000 }, () =>
       price(Quantity.fromDecimalString('0.4'), Rate.fromDecimalString('1'), 'USD'),
     );
-    const summedAfterRounding = Money.sum(perEvent.map((p) => p.amount), 'USD');
+    const summedAfterRounding = Money.sum(
+      perEvent.map((p) => p.amount),
+      'USD',
+    );
     assert.equal(summedAfterRounding.toDecimalString(), '0.00');
 
     const aggregated = price(
@@ -347,7 +355,10 @@ describe('Rate and Quantity', () => {
 describe('allocate', () => {
   it('splits without losing or inventing a minor unit', () => {
     const parts = allocate(Money.fromMinor(100n, 'USD'), [1n, 1n, 1n]);
-    assert.deepEqual(parts.map((p) => p.minor), [34n, 33n, 33n]);
+    assert.deepEqual(
+      parts.map((p) => p.minor),
+      [34n, 33n, 33n],
+    );
     assert.equal(Money.sum(parts, 'USD').minor, 100n);
   });
 
@@ -368,7 +379,10 @@ describe('allocate', () => {
     // it from the 97% share — a result that summed back correctly, so every
     // test that checked only the total passed.
     const parts = allocate(Money.fromMinor(10n, 'USD'), [1n, 1n, 97n]);
-    assert.deepEqual(parts.map((p) => p.minor), [0n, 0n, 10n]);
+    assert.deepEqual(
+      parts.map((p) => p.minor),
+      [0n, 0n, 10n],
+    );
     assert.equal(Money.sum(parts, 'USD').minor, 10n);
   });
 
@@ -380,8 +394,14 @@ describe('allocate', () => {
     const forwards = allocate(Money.fromMinor(10n, 'USD'), [1n, 1n, 97n]);
     const backwards = allocate(Money.fromMinor(10n, 'USD'), [97n, 1n, 1n]);
     assert.deepEqual(
-      forwards.map((p) => p.minor).slice().sort(),
-      backwards.map((p) => p.minor).slice().sort(),
+      forwards
+        .map((p) => p.minor)
+        .slice()
+        .sort(),
+      backwards
+        .map((p) => p.minor)
+        .slice()
+        .sort(),
     );
     assert.equal(backwards[0]!.minor, 10n, 'the 97 share keeps the penny wherever it sits');
   });
@@ -391,7 +411,10 @@ describe('allocate', () => {
     // to be the arguments rather than the sort's internal order.
     for (let i = 0; i < 5; i++) {
       const parts = allocate(Money.fromMinor(100n, 'USD'), [1n, 1n, 1n]);
-      assert.deepEqual(parts.map((p) => p.minor), [34n, 33n, 33n]);
+      assert.deepEqual(
+        parts.map((p) => p.minor),
+        [34n, 33n, 33n],
+      );
     }
   });
 
@@ -399,7 +422,10 @@ describe('allocate', () => {
     // Sign is handled by taking the magnitude, so the negative case must land
     // on the same shares with the sign put back — not on a mirror of them.
     const parts = allocate(Money.fromMinor(-10n, 'USD'), [1n, 1n, 97n]);
-    assert.deepEqual(parts.map((p) => p.minor), [0n, 0n, -10n]);
+    assert.deepEqual(
+      parts.map((p) => p.minor),
+      [0n, 0n, -10n],
+    );
     assert.equal(Money.sum(parts, 'USD').minor, -10n);
   });
 

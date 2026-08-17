@@ -364,8 +364,14 @@ export async function entries(db: SqlExecutor, q: EntriesQuery): Promise<LedgerE
        ORDER BY posted_at, transaction_id, leg_no
        LIMIT ${ENTRIES_PAGE}`,
       [
-        q.tenantId, q.subjectId, q.account ?? null, q.since ?? null, q.until ?? null,
-        cursor?.postedAt ?? null, cursor?.txId ?? null, cursor?.legNo ?? null,
+        q.tenantId,
+        q.subjectId,
+        q.account ?? null,
+        q.since ?? null,
+        q.until ?? null,
+        cursor?.postedAt ?? null,
+        cursor?.txId ?? null,
+        cursor?.legNo ?? null,
       ],
     );
     for (const row of rows) all.push(toEntry(row));

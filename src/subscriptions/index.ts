@@ -14,22 +14,18 @@
 // keeps. There is no path here that credits a balance from anything but a
 // verified payment webhook.
 
-export { definePlan, chargeForPeriod, addInterval, daysInPeriod } from './plan.ts';
+export type { Coupon, CouponDuration, DiscountRule } from './discount.ts';
 
 export { applyDiscount, discountForPeriod } from './discount.ts';
-export type { DiscountRule, Coupon, CouponDuration } from './discount.ts';
-
-export { createSubscription, getSubscription, cancelSubscription } from './store.ts';
-export type { CreateSubscriptionInput, SubscriptionRef } from './store.ts';
-
-export { chargeSubscriptionPeriod } from './settle.ts';
-export type { ChargePeriodInput, ChargePeriodResult } from './settle.ts';
-
-export { dueSubscriptions, chargeDueSubscriptions } from './sweep.ts';
-export type { DueQuery, SweepOptions, SweepItem, SweepReport } from './sweep.ts';
-
-export { createSubscriptions } from './instance.ts';
 export type { Subscriptions, SubscriptionsOptions } from './instance.ts';
+export { createSubscriptions } from './instance.ts';
+export { addInterval, chargeForPeriod, daysInPeriod, definePlan } from './plan.ts';
+export type { ChargePeriodInput, ChargePeriodResult } from './settle.ts';
+export { chargeSubscriptionPeriod } from './settle.ts';
+export type { CreateSubscriptionInput, SubscriptionRef } from './store.ts';
+export { cancelSubscription, createSubscription, getSubscription } from './store.ts';
+export type { DueQuery, SweepItem, SweepOptions, SweepReport } from './sweep.ts';
+export { chargeDueSubscriptions, dueSubscriptions } from './sweep.ts';
 
 export type {
   BillingInterval,

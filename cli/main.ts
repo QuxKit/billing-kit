@@ -17,21 +17,21 @@
 
 import { parseArgs } from 'node:util';
 
-import { loadConfig, resolveSettings, writeInitConfig, type Settings } from './config.ts';
-import { connect, redact, type Connection } from './db.ts';
+import { loadConfig, resolveSettings, type Settings, writeInitConfig } from './config.ts';
+import { type Connection, connect, redact } from './db.ts';
 import { CliError } from './errors.ts';
 import {
-  TABLE,
   applyMigration,
   ensureLedger,
   ledgerExists,
+  type MigrationFile,
+  type PlanEntry,
   plan,
   readApplied,
   readMigrations,
   releaseLock,
+  TABLE,
   takeLock,
-  type MigrationFile,
-  type PlanEntry,
 } from './migrations.ts';
 
 const USAGE = `billing-kit — usage-based billing as a library, over a provider you choose.
@@ -190,9 +190,7 @@ async function migrate(values: Values): Promise<number> {
     }
 
     process.stdout.write(
-      dryRun
-        ? `\n${pending.length} would be applied. Nothing was written.\n`
-        : `\n${pending.length} applied.\n`,
+      dryRun ? `\n${pending.length} would be applied. Nothing was written.\n` : `\n${pending.length} applied.\n`,
     );
     return 0;
   } finally {

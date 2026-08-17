@@ -19,12 +19,11 @@
 // there. Without it, a green result is equally consistent with a correct engine
 // and with a harness that never produced two overlapping transactions.
 
-import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-
+import { after, before, describe, it } from 'node:test';
+import { meterBatch } from '../driver.ts';
 import { createHarness } from './harness.ts';
 import { createPsqlExecutor, type PsqlExecutor } from './psql-executor.ts';
-import { meterBatch } from '../driver.ts';
 
 const h = createHarness('concurrency');
 const { createDatabase, psql, reset, scalar, seed } = h;
@@ -87,9 +86,7 @@ describe('metering under concurrency', () => {
       fundMinor: '100000000',
     });
 
-    const startGrid = await scalar(
-      `SELECT count(DISTINCT last_billed_at)::text FROM billing.billable_items`,
-    );
+    const startGrid = await scalar(`SELECT count(DISTINCT last_billed_at)::text FROM billing.billable_items`);
     assert.equal(startGrid, '1', 'seed should put every item on the same grid point');
 
     const executors: PsqlExecutor[] = Array.from({ length: WORKERS }, () => createPsqlExecutor(TEST_DB));
@@ -131,7 +128,11 @@ describe('metering under concurrency', () => {
                 FROM billing.charges GROUP BY item_id) c ON c.item_id = r.id
        WHERE c.hi <> r.last_billed_at
           OR c.mins <> (extract(epoch FROM (c.hi - c.lo)) / 60)`);
-    assert.equal(mismatched, 0, 'billed minutes must equal elapsed minutes, and the grid must sit at the last window end');
+    assert.equal(
+      mismatched,
+      0,
+      'billed minutes must equal elapsed minutes, and the grid must sit at the last window end',
+    );
 
     const itemsCharged = await num(`SELECT count(DISTINCT item_id)::text FROM billing.charges`);
     assert.equal(itemsCharged, ITEMS, 'every seeded item must have been billed');
@@ -258,10 +259,7 @@ describe('metering under concurrency', () => {
             // the failure this control is here to demonstrate. One row per
             // transaction means at most one lock is held, so the deadlock is
             // impossible and the read-modify-write race is all that is left.
-            const rows = await db.query<{ n: unknown }>(
-              'SELECT billing_test.meter_batch_unsafe($1, $2) AS n',
-              [1, 5],
-            );
+            const rows = await db.query<{ n: unknown }>('SELECT billing_test.meter_batch_unsafe($1, $2) AS n', [1, 5]);
             if (Number(rows[0]?.n ?? 0) === 0) break;
           }
         }),

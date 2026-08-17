@@ -6,17 +6,13 @@
 // functions remain the API; this is a convenience over them, never a different
 // one.
 
-import { chargeSubscriptionPeriod } from './settle.ts';
-import type { ChargePeriodInput, ChargePeriodResult } from './settle.ts';
-import {
-  cancelSubscription,
-  createSubscription,
-  getSubscription,
-} from './store.ts';
-import type { CreateSubscriptionInput, SubscriptionRef } from './store.ts';
-import { chargeDueSubscriptions, dueSubscriptions } from './sweep.ts';
-import type { DueQuery, SweepOptions, SweepReport } from './sweep.ts';
 import type { Clock, SqlExecutor, TenantId } from '../types.ts';
+import type { ChargePeriodInput, ChargePeriodResult } from './settle.ts';
+import { chargeSubscriptionPeriod } from './settle.ts';
+import type { CreateSubscriptionInput, SubscriptionRef } from './store.ts';
+import { cancelSubscription, createSubscription, getSubscription } from './store.ts';
+import type { DueQuery, SweepOptions, SweepReport } from './sweep.ts';
+import { chargeDueSubscriptions, dueSubscriptions } from './sweep.ts';
 import type { CancelWhen, Subscription } from './types.ts';
 
 export interface SubscriptionsOptions {
@@ -46,10 +42,8 @@ export function createSubscriptions(opts: SubscriptionsOptions): Subscriptions {
     createSubscription: (input) => createSubscription(db, input, clock()),
     getSubscription: (ref) => getSubscription(db, ref),
     cancelSubscription: (ref, when) => cancelSubscription(db, ref, when, clock()),
-    chargeSubscriptionPeriod: (input) =>
-      chargeSubscriptionPeriod(db, { ...input, now: input.now ?? clock() }),
+    chargeSubscriptionPeriod: (input) => chargeSubscriptionPeriod(db, { ...input, now: input.now ?? clock() }),
     dueSubscriptions: (query) => dueSubscriptions(db, { ...query, now: query?.now ?? clock() }),
-    chargeDueSubscriptions: (opts) =>
-      chargeDueSubscriptions(db, { ...opts, now: opts.now ?? clock() }),
+    chargeDueSubscriptions: (opts) => chargeDueSubscriptions(db, { ...opts, now: opts.now ?? clock() }),
   };
 }

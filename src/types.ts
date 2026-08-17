@@ -156,13 +156,7 @@ export type AccountKind =
   | 'write_off';
 
 /** What caused a transaction. Half of its natural key. */
-export type LedgerSourceKind =
-  | 'charge'
-  | 'settlement'
-  | 'payment'
-  | 'refund'
-  | 'adjustment'
-  | 'opening_balance';
+export type LedgerSourceKind = 'charge' | 'settlement' | 'payment' | 'refund' | 'adjustment' | 'opening_balance';
 
 /**
  * One leg. Signed: positive is a debit, negative is a credit, and the legs of

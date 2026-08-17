@@ -23,7 +23,7 @@ import { BillingError } from '../errors.ts';
 import type { Money, Quantity } from '../money.ts';
 import type { SqlExecutor, TenantId } from '../types.ts';
 import { chargeSubscriptionPeriod } from './settle.ts';
-import { toSubscription, type SubscriptionRow } from './store.ts';
+import { type SubscriptionRow, toSubscription } from './store.ts';
 import type { Plan, Subscription } from './types.ts';
 
 export interface DueQuery {

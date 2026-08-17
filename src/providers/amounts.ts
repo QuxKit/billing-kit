@@ -34,12 +34,7 @@ const malformed = (provider: string, field: string, value: unknown): ProviderErr
  * provider is not sending minor units and the adapter's assumption is wrong;
  * rounding it would hide that.
  */
-export const moneyFromNumber = (
-  value: unknown,
-  currency: string,
-  provider: string,
-  field: string,
-): Money => {
+export const moneyFromNumber = (value: unknown, currency: string, provider: string, field: string): Money => {
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
     throw malformed(provider, field, value);
   }
@@ -51,12 +46,7 @@ export const moneyFromNumber = (
  * `"1999"`. The better representation, and the one to prefer where a provider
  * offers both: it crosses `JSON.parse` untouched.
  */
-export const moneyFromMinorString = (
-  value: unknown,
-  currency: string,
-  provider: string,
-  field: string,
-): Money => {
+export const moneyFromMinorString = (value: unknown, currency: string, provider: string, field: string): Money => {
   if (typeof value !== 'string' || !/^-?\d{1,30}$/.test(value)) {
     throw malformed(provider, field, value);
   }
@@ -71,17 +61,14 @@ export const optionalMoneyFromMinorString = (
   provider: string,
   field: string,
 ): Money | null =>
-  value === null || value === undefined
-    ? null
-    : moneyFromMinorString(value, currency, provider, field);
+  value === null || value === undefined ? null : moneyFromMinorString(value, currency, provider, field);
 
 export const optionalMoneyFromNumber = (
   value: unknown,
   currency: string,
   provider: string,
   field: string,
-): Money | null =>
-  value === null || value === undefined ? null : moneyFromNumber(value, currency, provider, field);
+): Money | null => (value === null || value === undefined ? null : moneyFromNumber(value, currency, provider, field));
 
 /**
  * Providers speak lowercase currency; ISO 4217 is uppercase, and `Money`

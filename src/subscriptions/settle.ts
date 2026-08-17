@@ -14,10 +14,10 @@
 import { randomUUID } from 'node:crypto';
 import { BillingError } from '../errors.ts';
 import { accrualPosting, post } from '../ledger.ts';
-import { Quantity } from '../money.ts';
+import type { Quantity } from '../money.ts';
 import type { PostedTransaction, SqlExecutor } from '../types.ts';
 import { addInterval, chargeForPeriod } from './plan.ts';
-import { toSubscription, type SubscriptionRow } from './store.ts';
+import { type SubscriptionRow, toSubscription } from './store.ts';
 import type { PeriodCharge, Plan, Subscription, SubscriptionState } from './types.ts';
 
 export interface ChargePeriodInput {
@@ -53,15 +53,15 @@ export interface ChargePeriodResult {
  * subscription is marked to cancel at period end, this advance is where it
  * finally moves to `canceled`.
  */
-export async function chargeSubscriptionPeriod(
-  db: SqlExecutor,
-  input: ChargePeriodInput,
-): Promise<ChargePeriodResult> {
+export async function chargeSubscriptionPeriod(db: SqlExecutor, input: ChargePeriodInput): Promise<ChargePeriodResult> {
   const { plan, subscription: sub } = input;
   const now = input.now ?? new Date();
 
   if (plan.id !== sub.planId) {
-    throw new BillingError({ code: 'invalid_subscription', reason: `plan ${plan.id} is not this subscription's plan ${sub.planId}` });
+    throw new BillingError({
+      code: 'invalid_subscription',
+      reason: `plan ${plan.id} is not this subscription's plan ${sub.planId}`,
+    });
   }
   if (plan.currency !== sub.currency) {
     throw new BillingError({ code: 'currency_mismatch', left: sub.currency, right: plan.currency });

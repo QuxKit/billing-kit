@@ -13,8 +13,8 @@ import { describe, it } from 'node:test';
 
 import { Money } from '../../money';
 import { createStripeProvider } from '../stripe';
-import { providerIdFromOurRecords } from '../types';
 import type { ProviderCustomerId, ProviderItemId, ProviderSettlementId } from '../types';
+import { providerIdFromOurRecords } from '../types';
 import { expectProviderError } from './fixtures/expect';
 import { createHttpFixture, failThen, noJitter, noSleep, respond } from './fixtures/http';
 import * as fx from './fixtures/stripe';
@@ -56,12 +56,7 @@ describe('stripe: settlement in lines mode', () => {
 
     assert.deepEqual(
       fixture.calls.map((call) => `${call.method} ${call.path}`),
-      [
-        'POST /v1/invoiceitems',
-        'POST /v1/invoiceitems',
-        'POST /v1/invoices',
-        'POST /v1/invoices/in_TEST1/finalize',
-      ],
+      ['POST /v1/invoiceitems', 'POST /v1/invoiceitems', 'POST /v1/invoices', 'POST /v1/invoices/in_TEST1/finalize'],
     );
 
     const items = fixture.callsTo('POST', '/v1/invoiceitems');
@@ -193,9 +188,7 @@ describe('stripe: recovery', () => {
     const fixture = createHttpFixture({
       routes: {
         'GET /v1/customers/search': respond(fx.list([])),
-        'GET /v1/customers': respond(
-          fx.list([fx.customer({ metadata: { billing_kit_subject: 'subject-999' } })]),
-        ),
+        'GET /v1/customers': respond(fx.list([fx.customer({ metadata: { billing_kit_subject: 'subject-999' } })])),
       },
     });
     const found = await provider(fixture.fetch).findCustomer({
@@ -349,16 +342,13 @@ describe('stripe: webhook normalisation', () => {
     // rather than assumed, so a provider changing representation is an error
     // naming the field and not a total that is quietly wrong.
     await expectProviderError(
-      () =>
-        verify(fx.event('invoice.payment_succeeded', { id: 'in_1', currency: 'usd', amount_paid: 45.99 })),
+      () => verify(fx.event('invoice.payment_succeeded', { id: 'in_1', currency: 'usd', amount_paid: 45.99 })),
       'malformed_response',
     );
   });
 
   it('maps a deleted subscription to canceled', async () => {
-    const event = await verify(
-      fx.event('customer.subscription.deleted', { id: 'sub_1', status: 'active' }),
-    );
+    const event = await verify(fx.event('customer.subscription.deleted', { id: 'sub_1', status: 'active' }));
     assert.equal(event.kind, 'subscription.changed');
     if (event.kind !== 'subscription.changed') return;
     assert.equal(event.status, 'canceled');

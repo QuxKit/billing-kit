@@ -85,8 +85,7 @@ export async function createSubscription(
   }
 
   const startAt = input.startAt ?? now;
-  const trialEnd =
-    plan.trialDays && plan.trialDays > 0 ? new Date(startAt.getTime() + plan.trialDays * DAY_MS) : null;
+  const trialEnd = plan.trialDays && plan.trialDays > 0 ? new Date(startAt.getTime() + plan.trialDays * DAY_MS) : null;
   const periodEnd = addInterval(startAt, plan.interval);
   const state: SubscriptionState = trialEnd && trialEnd > startAt ? 'trialing' : 'active';
 

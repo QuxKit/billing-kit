@@ -16,16 +16,16 @@
 
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { assertSettlementMode, canCreateSubscriptions } from '../capabilities';
-import type { BillingProvider, CustomerRef, SettlementMode } from '../types';
 import { createPaddleProvider } from '../paddle';
 import { createStripeProvider } from '../stripe';
+import type { BillingProvider, CustomerRef, SettlementMode } from '../types';
 import { expectProviderError, expectProviderErrorSync } from './fixtures/expect';
-import { createHttpFixture, respond, type RecordedCall } from './fixtures/http';
+import { createHttpFixture, type RecordedCall, respond } from './fixtures/http';
 import * as paddleFixtures from './fixtures/paddle';
 import * as stripeFixtures from './fixtures/stripe';
 
@@ -200,10 +200,7 @@ for (const harness of harnesses) {
 
     it('rejects a missing signature header', async () => {
       const request = signed(harness.modelled.body);
-      await expectProviderError(
-        () => provider.verifyWebhook({ body: request.body, headers: {} }),
-        'signature_invalid',
-      );
+      await expectProviderError(() => provider.verifyWebhook({ body: request.body, headers: {} }), 'signature_invalid');
     });
 
     it('rejects a repeated signature header rather than picking one', async () => {
@@ -240,10 +237,7 @@ for (const harness of harnesses) {
     });
 
     it('exposes ensureSubscription exactly when it declares it can create one', () => {
-      assert.equal(
-        typeof provider.ensureSubscription === 'function',
-        provider.capabilities.createsSubscriptions,
-      );
+      assert.equal(typeof provider.ensureSubscription === 'function', provider.capabilities.createsSubscriptions);
       assert.equal(canCreateSubscriptions(provider), provider.capabilities.createsSubscriptions);
     });
 

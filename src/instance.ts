@@ -29,8 +29,11 @@
 // anyone holding a transaction, or dispatching across shards per call, still
 // wants the argument.
 
-import { record, recordMany, queryUsage } from './events';
-import { post, balance, entries } from './ledger';
+import type { StoredUsageEvent, UsageQuery } from './events';
+import { queryUsage, record, recordMany } from './events';
+import type { BalanceQuery, EntriesQuery } from './ledger';
+import { balance, entries, post } from './ledger';
+import type { Money } from './money';
 import type {
   Clock,
   LedgerEntry,
@@ -41,9 +44,6 @@ import type {
   SqlExecutor,
   UsageEvent,
 } from './types';
-import type { StoredUsageEvent, UsageQuery } from './events';
-import type { BalanceQuery, EntriesQuery } from './ledger';
-import type { Money } from './money';
 
 export interface BillingOptions {
   db: SqlExecutor;

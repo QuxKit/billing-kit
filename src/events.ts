@@ -262,13 +262,9 @@ function batchKey(event: UsageEvent): string {
   // A separator alone makes them the same, and the collision would drop a real
   // event as a duplicate of an unrelated one.
   const part = (s: string): string => `${s.length}:${s}`;
-  return [
-    part(event.tenantId),
-    part(event.source),
-    part(event.subjectId),
-    part(event.metric),
-    event.externalId,
-  ].join('|');
+  return [part(event.tenantId), part(event.source), part(event.subjectId), part(event.metric), event.externalId].join(
+    '|',
+  );
 }
 
 /**
@@ -289,11 +285,7 @@ function batchKey(event: UsageEvent): string {
  *    answer this returns. If profiling ever makes that trade worth it, the
  *    staging-table version belongs behind this same signature.
  */
-export async function recordMany(
-  db: SqlExecutor,
-  events: readonly UsageEvent[],
-  now: Date,
-): Promise<RecordedEvent[]> {
+export async function recordMany(db: SqlExecutor, events: readonly UsageEvent[], now: Date): Promise<RecordedEvent[]> {
   for (const event of events) validateEvent(event, now);
   if (events.length === 0) return [];
 

@@ -8,12 +8,11 @@
 // and a grid that drifts by 40 seconds a run looks fine until someone compares
 // an invoice against their own logs.
 
-import { before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-
+import { before, describe, it } from 'node:test';
+import { drain, meterBatch } from '../driver.ts';
 import { createHarness } from './harness.ts';
 import { createPsqlExecutor, type PsqlExecutor } from './psql-executor.ts';
-import { drain, meterBatch } from '../driver.ts';
 
 const h = createHarness('engine');
 const { createDatabase, fund, psql, reset, scalar, seed } = h;
@@ -166,23 +165,14 @@ describe('metering exactness', () => {
     assert.equal(await scalar('SELECT sum(amount_exact)::text FROM billing.charges'), '60.000000000000');
     // Each charge is 10 * 0.1 = 1.0 exactly, so no rounding residue anywhere.
     assert.equal(await scalar('SELECT sum(amount_minor)::text FROM billing.charges'), '60');
-    assert.equal(
-      await scalar('SELECT count(*)::text FROM billing.charges WHERE amount_exact <> amount_minor'),
-      '0',
-    );
+    assert.equal(await scalar('SELECT count(*)::text FROM billing.charges WHERE amount_exact <> amount_minor'), '0');
 
     const residual = await scalar('SELECT sum(amount_minor)::text FROM billing.ledger_entries');
     assert.equal(residual, '0');
   });
 
   it('refuses a batch size or cap that would remove the bound', async () => {
-    await assert.rejects(
-      () => withDb((db) => meterBatch(db, { batch: 0 })),
-      /p_batch must be at least 1/,
-    );
-    await assert.rejects(
-      () => withDb((db) => meterBatch(db, { maxMinutes: 0 })),
-      /p_max_minutes must be at least 1/,
-    );
+    await assert.rejects(() => withDb((db) => meterBatch(db, { batch: 0 })), /p_batch must be at least 1/);
+    await assert.rejects(() => withDb((db) => meterBatch(db, { maxMinutes: 0 })), /p_max_minutes must be at least 1/);
   });
 });

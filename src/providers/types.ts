@@ -63,9 +63,8 @@ export type ProviderRefundId = ProviderId<'refund'>;
  * another module, and it is greppable so a review can check every call site.
  * There are no others by design.
  */
-export const providerIdFromOurRecords = <Kind extends string>(
-  stored: string,
-): ProviderId<Kind> => stored as ProviderId<Kind>;
+export const providerIdFromOurRecords = <Kind extends string>(stored: string): ProviderId<Kind> =>
+  stored as ProviderId<Kind>;
 
 // ---------------------------------------------------------------------------
 // Capabilities
@@ -146,8 +145,7 @@ export interface ProviderCapabilities {
 }
 
 /** The settlement modes a particular provider's capabilities admit. */
-export type SettlementModeOf<Caps extends ProviderCapabilities> =
-  Caps['settlement'][number];
+export type SettlementModeOf<Caps extends ProviderCapabilities> = Caps['settlement'][number];
 
 // ---------------------------------------------------------------------------
 // Identity
@@ -179,14 +177,7 @@ export interface ProviderCustomer {
 // Subscriptions
 // ---------------------------------------------------------------------------
 
-export type SubscriptionStatus =
-  | 'trialing'
-  | 'active'
-  | 'past_due'
-  | 'paused'
-  | 'canceled'
-  | 'incomplete'
-  | 'unknown';
+export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'paused' | 'canceled' | 'incomplete' | 'unknown';
 
 export interface SubscriptionInput {
   /** Ours. See NO CLIENT IDS above — the adapter resolves the provider id. */
@@ -259,12 +250,11 @@ interface SettlementCommon {
  * half-settled. The discriminated union makes the wrong request unrepresentable
  * instead.
  */
-export type SettlementRequest<Mode extends SettlementMode = SettlementMode> =
-  Extract<
-    | (SettlementCommon & { mode: 'lines'; lines: readonly SettlementLine[] })
-    | (SettlementCommon & { mode: 'quantity'; quantities: readonly SettlementQuantity[] }),
-    { mode: Mode }
-  >;
+export type SettlementRequest<Mode extends SettlementMode = SettlementMode> = Extract<
+  | (SettlementCommon & { mode: 'lines'; lines: readonly SettlementLine[] })
+  | (SettlementCommon & { mode: 'quantity'; quantities: readonly SettlementQuantity[] }),
+  { mode: Mode }
+>;
 
 export type SettlementStatus = 'draft' | 'open' | 'settled' | 'void' | 'failed';
 
@@ -409,8 +399,8 @@ export type VerifiedEvent = VerifiedEventBase &
  * `Caps` is a type parameter so that a provider can be described precisely
  * enough for the compiler to reject a call it cannot serve. See `settle`.
  */
-export type BillingProvider<Caps extends ProviderCapabilities = ProviderCapabilities> =
-  ProviderCore<Caps> & SubscriptionCreation<Caps>;
+export type BillingProvider<Caps extends ProviderCapabilities = ProviderCapabilities> = ProviderCore<Caps> &
+  SubscriptionCreation<Caps>;
 
 /**
  * The half of the interface that varies by capability.
@@ -422,14 +412,13 @@ export type BillingProvider<Caps extends ProviderCapabilities = ProviderCapabili
  * than `never`: it keeps a concrete provider assignable to the general
  * `BillingProvider`, which polymorphic code needs.
  */
-export type SubscriptionCreation<Caps extends ProviderCapabilities> =
-  Caps['createsSubscriptions'] extends true
-    ? {
-        ensureSubscription(input: SubscriptionInput): Promise<ProviderSubscription>;
-      }
-    : {
-        ensureSubscription?: (input: SubscriptionInput) => Promise<ProviderSubscription>;
-      };
+export type SubscriptionCreation<Caps extends ProviderCapabilities> = Caps['createsSubscriptions'] extends true
+  ? {
+      ensureSubscription(input: SubscriptionInput): Promise<ProviderSubscription>;
+    }
+  : {
+      ensureSubscription?: (input: SubscriptionInput) => Promise<ProviderSubscription>;
+    };
 
 interface ProviderCore<Caps extends ProviderCapabilities = ProviderCapabilities> {
   /** For logs, metrics and error messages. Never branched on. */

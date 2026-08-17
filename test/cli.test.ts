@@ -26,8 +26,8 @@ import { spawnSync } from 'node:child_process';
 import { cp, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
@@ -312,7 +312,11 @@ describe('billing-kit migrate', () => {
     assert.match(r.stdout, /3 applied\./);
 
     await inTestDb(async (c) => {
-      const rows = (await c.query('SELECT filename, checksum, duration_ms FROM billing.schema_migrations ORDER BY applied_at, filename')).rows;
+      const rows = (
+        await c.query(
+          'SELECT filename, checksum, duration_ms FROM billing.schema_migrations ORDER BY applied_at, filename',
+        )
+      ).rows;
       assert.deepEqual(
         rows.map((row) => row.filename),
         ['001_first.sql', '002_second.sql', '003_third.sql'],
@@ -408,7 +412,10 @@ describe('billing-kit migrate', () => {
       // The CREATE TABLE in the same file went with it.
       assert.equal((await c.query("SELECT to_regclass('billing.gamma') AS t")).rows[0].t, null);
       const rows = (await c.query('SELECT filename FROM billing.schema_migrations ORDER BY filename')).rows;
-      assert.deepEqual(rows.map((x) => x.filename), ['001_first.sql', '002_second.sql', '003_third.sql']);
+      assert.deepEqual(
+        rows.map((x) => x.filename),
+        ['001_first.sql', '002_second.sql', '003_third.sql'],
+      );
     });
   });
 
@@ -503,19 +510,29 @@ describe('billing-kit migrate against the shipped sql/', () => {
 
     await inTestDb(async (c) => {
       const rows = (await c.query('SELECT filename FROM billing.schema_migrations ORDER BY filename')).rows;
-      assert.deepEqual(rows.map((x) => x.filename), [
-        '001_core.sql', '010_metering.sql', '011_partitions.sql',
-        '012_meter_batch.sql', '013_runs.sql', '020_subscriptions.sql',
-      ]);
+      assert.deepEqual(
+        rows.map((x) => x.filename),
+        [
+          '001_core.sql',
+          '010_metering.sql',
+          '011_partitions.sql',
+          '012_meter_batch.sql',
+          '013_runs.sql',
+          '020_subscriptions.sql',
+        ],
+      );
 
       // One ledger_entries, in 001_core's shape. `account` is the column the
       // metering shape did not have and `account_id` is the one it did, so the
       // pair says which definition survived rather than merely that a table
       // exists.
-      const cols = (await c.query(
-        `SELECT column_name FROM information_schema.columns
-          WHERE table_schema = 'billing' AND table_name = 'ledger_entries'`)).rows.map((x) => x.column_name);
-      assert.ok(cols.includes('account'), 'ledger_entries should carry 001_core\'s inline account column');
+      const cols = (
+        await c.query(
+          `SELECT column_name FROM information_schema.columns
+          WHERE table_schema = 'billing' AND table_name = 'ledger_entries'`,
+        )
+      ).rows.map((x) => x.column_name);
+      assert.ok(cols.includes('account'), "ledger_entries should carry 001_core's inline account column");
       assert.ok(!cols.includes('account_id'), 'the metering shape should be gone');
       assert.ok(!cols.includes('leg'), 'and so should its debit/credit discriminator');
 
@@ -556,7 +573,11 @@ describe('billing-kit migrate against the shipped sql/', () => {
 
     await inTestDb(async (c) => {
       const rows = (await c.query('SELECT filename FROM billing.schema_migrations')).rows;
-      assert.deepEqual(rows.map((x) => x.filename), [], 'nothing should be recorded');
+      assert.deepEqual(
+        rows.map((x) => x.filename),
+        [],
+        'nothing should be recorded',
+      );
     });
   });
 });

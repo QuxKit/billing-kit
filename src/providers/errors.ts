@@ -92,13 +92,8 @@ export class ProviderError extends Error {
    * customer gets billed twice.
    */
   get retryable(): boolean {
-    return (
-      this.kind === 'rate_limited' ||
-      this.kind === 'provider_unavailable' ||
-      this.kind === 'network'
-    );
+    return this.kind === 'rate_limited' || this.kind === 'provider_unavailable' || this.kind === 'network';
   }
 }
 
-export const isProviderError = (error: unknown): error is ProviderError =>
-  error instanceof ProviderError;
+export const isProviderError = (error: unknown): error is ProviderError => error instanceof ProviderError;

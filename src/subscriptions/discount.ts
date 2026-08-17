@@ -7,7 +7,7 @@
 // "20% off for three months" is expressible without the caller re-deriving it.
 
 import { BillingError } from '../errors.ts';
-import { Money, scaleFraction } from '../money.ts';
+import { type Money, scaleFraction } from '../money.ts';
 
 /**
  * How much to take off.
@@ -16,9 +16,7 @@ import { Money, scaleFraction } from '../money.ts';
  * same reason a rate is never a float: 0.2 is not 0.2, and a discount that
  * drifts is a discount an auditor cannot reproduce.
  */
-export type DiscountRule =
-  | { kind: 'percent'; bps: number }
-  | { kind: 'amount'; off: Money };
+export type DiscountRule = { kind: 'percent'; bps: number } | { kind: 'amount'; off: Money };
 
 /**
  * The discount amount for `amount` under a rule — a positive `Money` to subtract.

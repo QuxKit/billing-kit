@@ -18,7 +18,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { after, before } from 'node:test';
@@ -336,10 +336,7 @@ test('the bin is linked, starts under plain node, and reads back what init wrote
   const withDriver = statusAgainstNothing(bin);
   assert.equal(withDriver.status, 1, `expected a refusal, got:\n${withDriver.stdout}${withDriver.stderr}`);
   assert.match(withDriver.stderr, /cannot connect/, 'the failure should be a sentence, not a stack');
-  assert.doesNotMatch(
-    withDriver.stderr,
-    /Cannot find module|ERR_MODULE_NOT_FOUND|ERR_UNKNOWN_FILE_EXTENSION/,
-  );
+  assert.doesNotMatch(withDriver.stderr, /Cannot find module|ERR_MODULE_NOT_FOUND|ERR_UNKNOWN_FILE_EXTENSION/);
 
   // Not asserted here: that the default migrations directory is the packaged
   // one. `status` prints that header only after it connects, and this suite has

@@ -7,12 +7,11 @@
 
 import assert from 'node:assert/strict';
 import { after, describe, it } from 'node:test';
-
+import { queryUsage } from '../src/events';
 import { createBilling } from '../src/instance';
 import { Quantity } from '../src/money';
 import type { SqlExecutor, UsageEvent } from '../src/types';
-import { queryUsage } from '../src/events';
-import { SKIP_REASON, setupDatabase, type Harness } from './pg-executor';
+import { type Harness, SKIP_REASON, setupDatabase } from './pg-executor';
 
 let n = 0;
 function anEvent(overrides: Partial<UsageEvent> = {}): UsageEvent {

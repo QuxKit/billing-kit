@@ -205,10 +205,7 @@ export const normaliseStripeEvent = (payload: unknown): VerifiedEvent => {
         ...base,
         kind: 'subscription.changed',
         subscriptionRef: str(data['id'], 'subscription.id'),
-        status:
-          kind === 'customer.subscription.deleted'
-            ? 'canceled'
-            : subscriptionStatus(data['status']),
+        status: kind === 'customer.subscription.deleted' ? 'canceled' : subscriptionStatus(data['status']),
       };
 
     default:

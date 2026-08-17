@@ -8,8 +8,8 @@ import { describe, it } from 'node:test';
 
 import { BillingError } from '../src/errors';
 import { Money, Quantity, Rate } from '../src/money';
-import { addInterval, chargeForPeriod, daysInPeriod, definePlan } from '../src/subscriptions/plan.ts';
 import { applyDiscount, discountForPeriod } from '../src/subscriptions/discount.ts';
+import { addInterval, chargeForPeriod, daysInPeriod, definePlan } from '../src/subscriptions/plan.ts';
 
 const usd = (v: string) => Money.fromDecimalString(v, 'USD');
 
@@ -67,7 +67,10 @@ describe('chargeForPeriod', () => {
       trial: true,
     });
     assert.equal(c.total.minor, 60n);
-    assert.deepEqual(c.lines.map((l) => l.kind), ['usage']);
+    assert.deepEqual(
+      c.lines.map((l) => l.kind),
+      ['usage'],
+    );
   });
 
   it('prorates base and seats, never usage', () => {

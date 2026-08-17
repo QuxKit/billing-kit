@@ -15,8 +15,8 @@
 // ones you care about. Override the prefix with BILLING_KIT_TEST_DB.
 
 import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
 
@@ -32,13 +32,7 @@ const SQL_DIR = join(import.meta.dirname, '..', '..', '..', 'sql');
  * 010_metering.sql in an incompatible shape, and 001_core's won. 010 refuses to
  * apply without it. 011 must precede any charge; see its header.
  */
-const SCHEMA_FILES = [
-  '001_core.sql',
-  '010_metering.sql',
-  '011_partitions.sql',
-  '012_meter_batch.sql',
-  '013_runs.sql',
-];
+const SCHEMA_FILES = ['001_core.sql', '010_metering.sql', '011_partitions.sql', '012_meter_batch.sql', '013_runs.sql'];
 
 export interface SeedOptions {
   items: number;
@@ -110,18 +104,7 @@ export const createHarness = (name: string): Harness => {
   const database = `${PREFIX}_${name}`;
 
   const psql = async (sql: string): Promise<string> => {
-    const { stdout } = await exec('psql', [
-      '-X',
-      '-q',
-      '-A',
-      '-t',
-      '-v',
-      'ON_ERROR_STOP=1',
-      '-d',
-      database,
-      '-c',
-      sql,
-    ]);
+    const { stdout } = await exec('psql', ['-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-d', database, '-c', sql]);
     return stdout.trim();
   };
 

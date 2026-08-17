@@ -6,17 +6,17 @@
 
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 import { after, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
 import { balance } from '../src/ledger';
 import { Money, Quantity, Rate } from '../src/money';
-import type { SqlExecutor } from '../src/types';
 import { definePlan } from '../src/subscriptions/plan.ts';
-import { cancelSubscription, createSubscription, getSubscription } from '../src/subscriptions/store.ts';
 import { chargeSubscriptionPeriod } from '../src/subscriptions/settle.ts';
+import { cancelSubscription, createSubscription, getSubscription } from '../src/subscriptions/store.ts';
 import { chargeDueSubscriptions, dueSubscriptions } from '../src/subscriptions/sweep.ts';
+import type { SqlExecutor } from '../src/types';
 import { fromPool, SKIP_REASON, TEST_DATABASE_URL } from './pg-executor';
 
 const usd = (v: string) => Money.fromDecimalString(v, 'USD');
@@ -48,7 +48,11 @@ const paid = definePlan({
   flat: usd('49.00'),
   seats: { unit: usd('10.00'), min: 1 },
   usage: [
-    { metric: 'tokens.input', included: q(1_000_000n), price: { kind: 'flat', rate: Rate.fromDecimalString('0.00012') } },
+    {
+      metric: 'tokens.input',
+      included: q(1_000_000n),
+      price: { kind: 'flat', rate: Rate.fromDecimalString('0.00012') },
+    },
   ],
 });
 
@@ -65,13 +69,21 @@ describe('subscriptions persistence', { skip: harness === null ? SKIP_REASON : f
 
   it('creates idempotently on the caller key', async () => {
     const a = await createSubscription(db, { tenantId: 'acme', subjectId: 'u1', key: 'k1', plan: paid, seats: 3 }, NOW);
-    const b = await createSubscription(db, { tenantId: 'acme', subjectId: 'u1', key: 'k1', plan: paid, seats: 99 }, NOW);
+    const b = await createSubscription(
+      db,
+      { tenantId: 'acme', subjectId: 'u1', key: 'k1', plan: paid, seats: 99 },
+      NOW,
+    );
     assert.equal(a.id, b.id);
     assert.equal(b.seats, 3, 'a retried create must not overwrite the seats');
   });
 
   it('charges a period, posts it to the ledger, and advances', async () => {
-    const sub = await createSubscription(db, { tenantId: 'acme', subjectId: 'u2', key: 'k2', plan: paid, seats: 3 }, NOW);
+    const sub = await createSubscription(
+      db,
+      { tenantId: 'acme', subjectId: 'u2', key: 'k2', plan: paid, seats: 3 },
+      NOW,
+    );
     const r = await chargeSubscriptionPeriod(db, {
       plan: paid,
       subscription: sub,
@@ -91,7 +103,11 @@ describe('subscriptions persistence', { skip: harness === null ? SKIP_REASON : f
   });
 
   it('is idempotent: charging the same period again posts nothing new', async () => {
-    const sub = await createSubscription(db, { tenantId: 'acme', subjectId: 'u3', key: 'k3', plan: paid, seats: 2 }, NOW);
+    const sub = await createSubscription(
+      db,
+      { tenantId: 'acme', subjectId: 'u3', key: 'k3', plan: paid, seats: 2 },
+      NOW,
+    );
     const usage = { 'tokens.input': q(1_000_000n) };
 
     const first = await chargeSubscriptionPeriod(db, { plan: paid, subscription: sub, usage, now: NOW });
@@ -113,7 +129,11 @@ describe('subscriptions persistence', { skip: harness === null ? SKIP_REASON : f
   });
 
   it('waives base and seats during the trial, then activates', async () => {
-    const sub = await createSubscription(db, { tenantId: 'acme', subjectId: 'u4', key: 'k4', plan: trialPlan, seats: 2 }, NOW);
+    const sub = await createSubscription(
+      db,
+      { tenantId: 'acme', subjectId: 'u4', key: 'k4', plan: trialPlan, seats: 2 },
+      NOW,
+    );
     assert.equal(sub.state, 'trialing');
 
     const r = await chargeSubscriptionPeriod(db, { plan: trialPlan, subscription: sub, now: NOW });
@@ -123,7 +143,11 @@ describe('subscriptions persistence', { skip: harness === null ? SKIP_REASON : f
   });
 
   it('cancels at period end when the next period is charged', async () => {
-    const sub = await createSubscription(db, { tenantId: 'acme', subjectId: 'u5', key: 'k5', plan: paid, seats: 1 }, NOW);
+    const sub = await createSubscription(
+      db,
+      { tenantId: 'acme', subjectId: 'u5', key: 'k5', plan: paid, seats: 1 },
+      NOW,
+    );
     const marked = await cancelSubscription(db, { tenantId: 'acme', id: sub.id }, 'period_end', NOW);
     assert.equal(marked.cancelAtPeriodEnd, true);
     assert.equal(marked.state, 'active', 'still active until the period is charged');
@@ -137,9 +161,17 @@ describe('subscriptions persistence', { skip: harness === null ? SKIP_REASON : f
     const startedAWeekAgo = new Date(NOW.getTime() - 7 * 86_400_000);
     // Due: its monthly period would end a month after a start well in the past…
     const back = new Date(NOW.getTime() - 40 * 86_400_000);
-    const dueSub = await createSubscription(db, { tenantId: 'sweep', subjectId: 'd1', key: 'due', plan: paid, seats: 2, startAt: back }, NOW);
+    const dueSub = await createSubscription(
+      db,
+      { tenantId: 'sweep', subjectId: 'd1', key: 'due', plan: paid, seats: 2, startAt: back },
+      NOW,
+    );
     // Not due: starts now, so its period ends a month out.
-    await createSubscription(db, { tenantId: 'sweep', subjectId: 'd2', key: 'notdue', plan: paid, seats: 2, startAt: NOW }, NOW);
+    await createSubscription(
+      db,
+      { tenantId: 'sweep', subjectId: 'd2', key: 'notdue', plan: paid, seats: 2, startAt: NOW },
+      NOW,
+    );
     void startedAWeekAgo;
 
     const due = await dueSubscriptions(db, { tenantId: 'sweep', now: NOW });
@@ -169,7 +201,11 @@ describe('subscriptions persistence', { skip: harness === null ? SKIP_REASON : f
 
   it('skips a due subscription whose plan no longer resolves', async () => {
     const back = new Date(NOW.getTime() - 40 * 86_400_000);
-    const orphan = await createSubscription(db, { tenantId: 'sweep2', subjectId: 'o1', key: 'orphan', plan: paid, seats: 1, startAt: back }, NOW);
+    const orphan = await createSubscription(
+      db,
+      { tenantId: 'sweep2', subjectId: 'o1', key: 'orphan', plan: paid, seats: 1, startAt: back },
+      NOW,
+    );
     const report = await chargeDueSubscriptions(db, {
       tenantId: 'sweep2',
       now: NOW,

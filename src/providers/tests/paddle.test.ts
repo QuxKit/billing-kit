@@ -16,13 +16,7 @@ import { Money } from '../../money';
 import { createPaddleProvider } from '../paddle';
 import { providerIdFromOurRecords } from '../types';
 import { expectProviderError } from './fixtures/expect';
-import {
-  createHttpFixture,
-  FixtureNetworkFailure,
-  noJitter,
-  noSleep,
-  respond,
-} from './fixtures/http';
+import { createHttpFixture, FixtureNetworkFailure, noJitter, noSleep, respond } from './fixtures/http';
 import * as fx from './fixtures/paddle';
 
 const CUSTOMER = providerIdFromOurRecords<'customer'>('ctm_TEST1');
@@ -166,10 +160,7 @@ describe('paddle: no request idempotency key', () => {
     // permanently fatal, which is a state a subject never leaves.
     const fixture = createHttpFixture({
       routes: {
-        'POST /customers': respond(
-          { error: { code: 'customer_already_exists', detail: 'email in use' } },
-          409,
-        ),
+        'POST /customers': respond({ error: { code: 'customer_already_exists', detail: 'email in use' } }, 409),
         'GET /customers': respond(fx.wrapList([fx.customer()])),
       },
     });
@@ -320,10 +311,7 @@ describe('paddle: webhook normalisation', () => {
 
   it('reads string minor units without going through a float', async () => {
     const event = await verify(
-      fx.event(
-        'transaction.billed',
-        fx.withTotals(fx.transaction(), { subtotal: '4199', tax: '400', total: '4599' }),
-      ),
+      fx.event('transaction.billed', fx.withTotals(fx.transaction(), { subtotal: '4199', tax: '400', total: '4599' })),
     );
     assert.equal(event.kind, 'settlement.finalized');
     if (event.kind !== 'settlement.finalized') return;
@@ -364,9 +352,7 @@ describe('paddle: webhook normalisation', () => {
   });
 
   it('maps an approved refund to a settled one, with its transaction', async () => {
-    const event = await verify(
-      fx.event('adjustment.updated', fx.adjustment({ status: 'approved' })),
-    );
+    const event = await verify(fx.event('adjustment.updated', fx.adjustment({ status: 'approved' })));
     assert.equal(event.kind, 'refund.settled');
     if (event.kind !== 'refund.settled') return;
     assert.equal(event.amount.minor, 4599n);
@@ -374,16 +360,12 @@ describe('paddle: webhook normalisation', () => {
   });
 
   it('maps a rejected refund to declined', async () => {
-    const event = await verify(
-      fx.event('adjustment.updated', fx.adjustment({ status: 'rejected' })),
-    );
+    const event = await verify(fx.event('adjustment.updated', fx.adjustment({ status: 'rejected' })));
     assert.equal(event.kind, 'refund.declined');
   });
 
   it('does not treat a credit adjustment as a refund', async () => {
-    const event = await verify(
-      fx.event('adjustment.updated', fx.adjustment({ action: 'credit', status: 'approved' })),
-    );
+    const event = await verify(fx.event('adjustment.updated', fx.adjustment({ action: 'credit', status: 'approved' })));
     assert.equal(event.kind, 'unknown');
   });
 });

@@ -52,7 +52,7 @@ import type {
   SubscriptionStatus,
   VerifiedEvent,
 } from '../types';
-import { invoiceTax, normaliseStripeEvent, object, str, STRIPE } from './events';
+import { invoiceTax, normaliseStripeEvent, object, STRIPE, str } from './events';
 
 export const STRIPE_CAPABILITIES = {
   settlement: ['lines', 'quantity'],
@@ -142,9 +142,7 @@ const subscriptionStatus = (value: unknown): SubscriptionStatus => {
 
 const unixSeconds = (date: Date): number => Math.floor(date.getTime() / 1000);
 
-export const createStripeProvider = (
-  config: StripeConfig,
-): BillingProvider<StripeCapabilities> => {
+export const createStripeProvider = (config: StripeConfig): BillingProvider<StripeCapabilities> => {
   const subjectKey = config.subjectKey ?? 'billing_kit_subject';
   const settlementKey = config.settlementKey ?? 'billing_kit_settlement';
   const metricKey = config.metricKey ?? 'billing_kit_metric';
@@ -274,14 +272,9 @@ export const createStripeProvider = (
     return toSubscription(raw);
   };
 
-  const cancelSubscription = async (
-    id: ProviderSubscriptionId,
-    at: CancelAt,
-  ): Promise<ProviderSubscription> => {
+  const cancelSubscription = async (id: ProviderSubscriptionId, at: CancelAt): Promise<ProviderSubscription> => {
     if (at === 'immediately') {
-      return toSubscription(
-        await http.request<unknown>({ method: 'DELETE', path: `/v1/subscriptions/${id}` }),
-      );
+      return toSubscription(await http.request<unknown>({ method: 'DELETE', path: `/v1/subscriptions/${id}` }));
     }
     return toSubscription(
       await http.request<unknown>({
@@ -293,10 +286,7 @@ export const createStripeProvider = (
     );
   };
 
-  const resolveItem = async (
-    subscriptionId: ProviderSubscriptionId,
-    metric: string,
-  ): Promise<ProviderItem | null> => {
+  const resolveItem = async (subscriptionId: ProviderSubscriptionId, metric: string): Promise<ProviderItem | null> => {
     const raw = await http.request<unknown>({
       method: 'GET',
       path: `/v1/subscriptions/${subscriptionId}`,
@@ -319,9 +309,7 @@ export const createStripeProvider = (
 
   // --- settlement ----------------------------------------------------------
 
-  const settle = async (
-    request: SettlementRequest<'lines' | 'quantity'>,
-  ): Promise<SettlementResult> => {
+  const settle = async (request: SettlementRequest<'lines' | 'quantity'>): Promise<SettlementResult> => {
     const currency = request.currency.toLowerCase();
 
     if (request.mode === 'lines') {
@@ -450,9 +438,7 @@ export const createStripeProvider = (
     // An invoice is not a payment. Refunding one means finding the payment
     // behind it, and the adapter does that lookup so no caller ever holds a
     // charge id it could be tricked into supplying from a request body.
-    const invoice = object(
-      await http.request<unknown>({ method: 'GET', path: `/v1/invoices/${input.settlementRef}` }),
-    );
+    const invoice = object(await http.request<unknown>({ method: 'GET', path: `/v1/invoices/${input.settlementRef}` }));
     const paymentIntent =
       typeof invoice['payment_intent'] === 'string'
         ? invoice['payment_intent']
@@ -492,7 +478,8 @@ export const createStripeProvider = (
       // webhook. Keeping one path means the asynchronous provider is not the
       // only one exercising it, and a path only one provider uses is a path
       // that is broken.
-      status: status === 'succeeded' ? 'settled' : status === 'failed' || status === 'canceled' ? 'declined' : 'pending',
+      status:
+        status === 'succeeded' ? 'settled' : status === 'failed' || status === 'canceled' ? 'declined' : 'pending',
       raw,
     };
   };

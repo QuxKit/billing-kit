@@ -23,51 +23,47 @@
 // executor and the clock over them for the common case where an application has
 // one of each.
 
+export type { BillingErrorCode, BillingFailure } from './errors';
+export { BillingError } from './errors';
+export type {
+  AggregateUsageQuery,
+  AggregationMethod,
+  StoredUsageEvent,
+  UsageAggregation,
+  UsageQuery,
+} from './events';
+export { aggregateUsage, queryUsage, record, recordMany, validateEvent } from './events';
+export type { Billing, BillingOptions } from './instance';
+export { createBilling } from './instance';
+export type { BalanceQuery, EntriesQuery } from './ledger';
 export {
-  Money,
-  Quantity,
-  Rate,
-  price,
-  priceTiered,
-  scaleFraction,
+  accrualPosting,
+  assertBalanced,
+  balance,
+  creditNotePosting,
+  entries,
+  paymentPosting,
+  post,
+  refundPosting,
+  settlementPosting,
+  walletBalance,
+  walletRedeemPosting,
+  walletTopupPosting,
+} from './ledger';
+export type { MoneyJSON, PricedAmount, Tier, TierMode } from './money';
+export {
   allocate,
   currencyExponent,
+  DECIMAL_SCALE,
   isKnownCurrency,
   knownCurrencies,
-  DECIMAL_SCALE,
+  Money,
+  price,
+  priceTiered,
+  Quantity,
+  Rate,
+  scaleFraction,
 } from './money';
-export type { MoneyJSON, PricedAmount, Tier, TierMode } from './money';
-
-export { BillingError } from './errors';
-export type { BillingFailure, BillingErrorCode } from './errors';
-
-export { createBilling } from './instance';
-export type { Billing, BillingOptions } from './instance';
-
-export { record, recordMany, queryUsage, aggregateUsage, validateEvent } from './events';
-export type {
-  UsageQuery,
-  StoredUsageEvent,
-  AggregationMethod,
-  AggregateUsageQuery,
-  UsageAggregation,
-} from './events';
-
-export {
-  post,
-  balance,
-  entries,
-  assertBalanced,
-  accrualPosting,
-  settlementPosting,
-  paymentPosting,
-  refundPosting,
-  creditNotePosting,
-  walletTopupPosting,
-  walletRedeemPosting,
-  walletBalance,
-} from './ledger';
-export type { BalanceQuery, EntriesQuery } from './ledger';
 
 export type {
   AccountKind,
