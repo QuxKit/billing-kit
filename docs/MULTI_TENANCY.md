@@ -62,6 +62,12 @@ tenant-kit's row-level security, and the whale-tenant-on-its-own-database
 pattern both kits support through the shared executor — lives in
 [tenant-kit's docs/BILLING_KIT.md](http://localhost:3003/brett/tenant-kit/src/branch/main/docs/BILLING_KIT.md).
 
+billing-kit now ships its own half of that enforcement: the optional
+`sql/090_rls.sql` enables + forces RLS on every `billing.*` table carrying
+`tenant_id`, policy on `current_setting('tenancy.tenant_id', true)` — the same
+setting tenant-kit's `SET LOCAL tenancy.tenant_id` declares, so the two kits'
+policies are one convention. See README "Row-level security".
+
 ## One caution that belongs on this side of the seam
 
 billing-kit's cross-tenant machinery — the metering drain, the subscription

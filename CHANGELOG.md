@@ -7,6 +7,12 @@ All notable changes to `@quxkit/billing-kit` are recorded here. The format is
 ## [Unreleased]
 
 ### Added
+- `sql/090_rls.sql` (optional): enables + **forces** row-level security on
+  every `billing.*` table with a `tenant_id` column, policy
+  `tenant_id = current_setting('tenancy.tenant_id', true)` (USING and WITH
+  CHECK) — compatible with tenant-kit's `SET LOCAL tenancy.tenant_id`.
+  Closed by default; discovers tables by column so a re-run covers new ones.
+  Proven by a test running as a non-superuser, non-BYPASSRLS table owner.
 - `pricePackage(quantity, { unitsPerPackage, pricePerPackage, roundUp })` in
   the core: per-package pricing (SMS per 500, tokens per 1,000). `roundUp`
   bills whole packages in integer arithmetic (zero residue); without it,

@@ -90,6 +90,7 @@ system*. Everything below is how it earns the word "correct."
 | Usage aggregation — sum / count / max / unique | `billing-kit` | ✅ implemented, tested |
 | Tiered pricing — volume / graduated | `billing-kit` | ✅ implemented, tested |
 | Package pricing — per-N units, round-up | `billing-kit` | ✅ implemented, tested |
+| Row-level security (optional `sql/090_rls.sql`) | SQL | ✅ implemented, tested as non-superuser owner |
 | Subscriptions — plans, seats, overage, proration, trials | `billing-kit/subscriptions` | ✅ implemented, tested |
 | Coupons / discounts | `billing-kit/subscriptions` | ✅ implemented, tested |
 | Credit notes, prepaid wallets | `billing-kit` | ✅ implemented, tested |
@@ -696,6 +697,44 @@ Two things in that file exist because Prisma cannot express them, and `db push`
 produces a plausible wrong answer for both — a partitioned parent's primary key
 must include the partition key, and `PARTITION BY` has no Prisma equivalent at
 all. Nothing fails and nothing warns; you find out at a hundred million rows.
+
+## Row-level security
+
+`sql/090_rls.sql` — **optional** — makes the database enforce the tenant
+boundary the queries already respect: it enables **and forces** RLS on every
+`billing.*` table with a `tenant_id` column, with one policy:
+
+```sql
+USING (tenant_id = current_setting('tenancy.tenant_id', true))
+```
+
+The tenant is declared per transaction, compatible with tenant-kit:
+
+```sql
+BEGIN;
+SET LOCAL tenancy.tenant_id = 'acme';
+-- every statement here sees (and can write) only acme's rows
+COMMIT;
+```
+
+- **Closed by default.** `current_setting(..., true)` is NULL when nothing was
+  declared, NULL equals nothing, so an undeclared connection reads zero rows
+  and cannot write any. The forgotten `WHERE tenant_id = ...` in a host's own
+  reporting SQL returns the declared tenant's rows, never everyone's.
+- **FORCE is the point.** Plain RLS exempts the table owner — usually exactly
+  the role the application connects as. With FORCE the owner is bound too;
+  only superusers and `BYPASSRLS` roles step around it, so do not run the
+  application as either. The test suite proves the property as a
+  non-superuser, non-BYPASSRLS role that owns the tables (`test/rls.test.ts`).
+- **Idempotent and re-runnable.** The file discovers tenant tables by column,
+  so run it again after any migration that adds one. It is numbered 090 to run
+  last; `npx billing-kit migrate` applies it with the rest.
+- Writes are checked too (`WITH CHECK`): posting a ledger transaction for a
+  tenant the transaction did not declare fails at the database.
+
+Cost: one `current_setting` comparison per row scan. Partitioned parents carry
+the policy; access through the parent (the only path the library uses) is
+covered.
 
 ## CLI
 
