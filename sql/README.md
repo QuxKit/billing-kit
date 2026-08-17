@@ -8,7 +8,7 @@ partition key, BRIN indexes, and the batch function itself (ARCHITECTURE.md
 `npx billing-kit migrate` applies a directory of these in order, once each,
 tracked in `billing.schema_migrations` and checksummed so an already-applied
 file that was edited is refused rather than skipped. Point it at the whole of
-`sql/` — all five apply in one run.
+`sql/` — all six apply in one run.
 
 They did not, until recently. `001_core.sql` and `010_metering.sql` each
 declared `billing.ledger_entries`, in shapes that could not both be right, and
@@ -30,6 +30,7 @@ psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/010_metering.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/011_partitions.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/012_meter_batch.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/013_runs.sql
+psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/020_subscriptions.sql
 psql -d "$DATABASE" -c 'SELECT billing.ensure_partitions()'
 ```
 
@@ -39,17 +40,19 @@ same problem: the core tables are what everything else references. It calls
 take a row immediately; `ensure_partitions()` above covers the metering tables
 `011` adds.
 
-Every file is re-runnable. Run all four after every `prisma db push` or
+Every file is re-runnable. Run all of them after every `prisma db push` or
 `prisma migrate deploy`, for the reason `ai_member/scripts/index-db.ts`
 documents for its own generated columns: a push makes the database match the
 schema, and none of this is in the schema.
 
 | File | Contents |
 |---|---|
+| `001_core.sql` | The `billing` schema, `usage_events`, `usage_event_keys`, `ledger_transactions`, `ledger_entries` (partitioned), the balance and append-only triggers, `ensure_core_partitions()`. Everything else references it. |
 | `010_metering.sql` | Tables and indexes. `billable_items`, `charges`, `meter_runs`. Not `ledger_entries` and not `ledger_accounts` — see below. |
 | `011_partitions.sql` | `ensure_partitions()`, `partition_report()`, `metering_health()`. |
 | `012_meter_batch.sql` | `round_half_even()` and `meter_batch()` — the engine. |
 | `013_runs.sql` | `claim_meter_run()`, `heartbeat_meter_run()`, `settle_meter_run()` — the drain lease. |
+| `020_subscriptions.sql` | `subscriptions` and `subscription_periods` — the recurring-plan half (`billing-kit/subscriptions`). Not partitioned: bounded by customers, not traffic. Needs `001_core` only; the sweep posts each period's charge into its ledger. |
 
 **Order matters.** `011` must run before the first charge: `010` declares
 `charges` and `ledger_entries` as partitioned with no partitions, and an insert
