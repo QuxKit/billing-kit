@@ -65,6 +65,14 @@
       "import": "./dist/subscriptions/index.mjs",
       "require": "./dist/subscriptions/index.cjs"
     },
+    "./pg": {
+      "types": {
+        "import": "./dist/pg.d.ts",
+        "require": "./dist/pg.d.cts"
+      },
+      "import": "./dist/pg.mjs",
+      "require": "./dist/pg.cjs"
+    },
     "./sql/*": "./sql/*",
     "./package.json": "./package.json"
   },

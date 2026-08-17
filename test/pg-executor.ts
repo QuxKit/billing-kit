@@ -1,53 +1,46 @@
-// A pg.Pool adapter for SqlExecutor, and the test harness that uses it.
+// The Postgres test harness.
 //
-// This file doubles as the proof of a design claim: §7.1 rule 3 says a bare
-// `pg.Pool` satisfies the executor in about ten lines and that Prisma is not a
-// runtime requirement. `fromPool` below is those lines. If it ever stops being
-// short, the interface has grown something it should not have.
+// The executor itself is the shipped adapter, `pgExecutor` from `src/pg.ts`
+// (published as `@quxkit/billing-kit/pg`); `fromPool` is kept as an alias so
+// older test code and the README's earlier wording still resolve. What this file
+// adds is the schema rebuild and the skip/require decision.
 //
-// `pg` is a devDependency. billing-kit itself has no runtime dependencies.
+// `pg` is a devDependency here and an optional peer for consumers.
 
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
+import { pgExecutor } from '../src/pg';
 import type { SqlExecutor } from '../src/types';
 
-export function fromPool(pool: pg.Pool): SqlExecutor {
-  return {
-    async query<T>(text: string, params?: readonly unknown[]): Promise<T[]> {
-      const result = await pool.query(text, params as unknown[]);
-      return result.rows as T[];
-    },
-    async transaction<T>(fn: (tx: SqlExecutor) => Promise<T>): Promise<T> {
-      // The body must run on one connection. Handing back the pool would let
-      // each statement land on a different connection, and the ROLLBACK would
-      // then cover none of them.
-      const client = await pool.connect();
-      const bound: SqlExecutor = {
-        async query<R>(text: string, params?: readonly unknown[]): Promise<R[]> {
-          const result = await client.query(text, params as unknown[]);
-          return result.rows as R[];
-        },
-        transaction: (inner) => inner(bound),
-      };
-      try {
-        await client.query('BEGIN');
-        const out = await fn(bound);
-        await client.query('COMMIT');
-        return out;
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      } finally {
-        client.release();
-      }
-    },
-  };
-}
+export const fromPool = pgExecutor;
 
 export const TEST_DATABASE_URL =
   process.env.BILLING_KIT_TEST_DATABASE_URL ?? 'postgres://localhost:5432/billing_kit_test';
+
+export const SKIP_REASON =
+  `no database at ${TEST_DATABASE_URL} — set BILLING_KIT_TEST_DATABASE_URL or ` +
+  'run `createdb billing_kit_test` to exercise the SQL paths';
+
+/**
+ * Whether the DB-backed suites may skip when the database is unreachable.
+ *
+ * Locally, yes: the money tests are useful on a laptop with no Postgres. In CI,
+ * no: `REQUIRE_DB=1` turns an unreachable database into a hard failure, so a
+ * misconfigured service container cannot produce a green run that exercised
+ * none of the SQL.
+ */
+export const REQUIRE_DB = process.env.REQUIRE_DB !== undefined && process.env.REQUIRE_DB !== '';
+
+/**
+ * Called by every harness when the database cannot be reached. Throws under
+ * `REQUIRE_DB`; otherwise returns so the caller can skip with `reason`.
+ */
+export function unreachable(reason: string, cause: unknown): void {
+  if (!REQUIRE_DB) return;
+  throw new Error(`REQUIRE_DB is set and the test database is unreachable: ${reason}`, { cause });
+}
 
 export interface Harness {
   db: SqlExecutor;
@@ -73,8 +66,9 @@ export async function setupDatabase(): Promise<Harness | null> {
 
   try {
     await pool.query('SELECT 1');
-  } catch {
+  } catch (error) {
     await pool.end().catch(() => {});
+    unreachable(SKIP_REASON, error);
     return null;
   }
 
@@ -86,12 +80,8 @@ export async function setupDatabase(): Promise<Harness | null> {
   await pool.query('SELECT billing.ensure_core_partitions(2, $1)', [new Date()]);
 
   return {
-    db: fromPool(pool),
+    db: pgExecutor(pool),
     pool,
     close: () => pool.end(),
   };
 }
-
-export const SKIP_REASON =
-  `no database at ${TEST_DATABASE_URL} — set BILLING_KIT_TEST_DATABASE_URL or ` +
-  'run `createdb billing_kit_test` to exercise the SQL paths';
