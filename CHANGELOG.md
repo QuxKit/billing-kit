@@ -7,6 +7,14 @@ All notable changes to `@quxkit/billing-kit` are recorded here. The format is
 ## [Unreleased]
 
 ### Added
+- `applyVerifiedEvent(db, { provider, event, resolve })` in
+  `@quxkit/billing-kit/providers`: posts the ledger transaction a
+  `VerifiedEvent` means (`payment.succeeded` → payment, `refund.settled` →
+  refund; failures, declines and informational kinds post nothing and return
+  `{ applied: false, reason }`), idempotent on `(provider, providerEventId)`
+  through the new `billing.provider_events` table
+  (`sql/030_provider_events.sql`). A redelivery is answered from the row and
+  writes nothing.
 - `@quxkit/billing-kit/pg` subpath: `pgExecutor(pool)` — the shipped
   `SqlExecutor` over a `pg.Pool`, with transaction pinning. `pg` stays an
   optional peer dependency; the test suite now runs on this adapter instead

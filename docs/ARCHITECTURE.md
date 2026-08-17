@@ -546,9 +546,25 @@ than returning a stale response for a request that was never made.
 
 ### 4.6 Webhooks
 
-Unique on `(provider, provider_event_id)`. Store first, acknowledge, then
-process — a 200 you sent before persisting is a lost event when the process dies
-between.
+Unique on `(provider, provider_event_id)` — `billing.provider_events`
+(`sql/030_provider_events.sql`). `applyVerifiedEvent` claims that row and posts
+the matching ledger transaction in one database transaction, so there is no
+window in which the event is recorded and the posting is not, or the reverse.
+Every event is recorded — posting or not — and a redelivery is answered from the
+row. Store first, acknowledge, then process — a 200 you sent before persisting
+is a lost event when the process dies between.
+
+The mapping is small and closed: `payment.succeeded` posts a payment,
+`refund.settled` posts a refund, everything else posts nothing and says why.
+The posting's `source_id` is keyed by the provider's settlement ref, not the
+event id, because one payment can arrive as two events (Stripe's `invoice.paid`
+and `invoice.payment_succeeded`); the ledger's own idempotency then collapses
+them, and a second *different* amount for one settlement is refused rather than
+averaged.
+
+Which subject a settlement belongs to is the host's knowledge — it called
+`settle` and stored the ref — so the resolver is a parameter. An event the host
+cannot resolve is recorded with `tenant_id NULL` and posted for no one.
 
 Out-of-order delivery is normal, not exceptional. State transitions are guarded
 by `occurredAt` from the provider, and a transition backwards is recorded and
