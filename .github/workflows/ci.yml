@@ -1,0 +1,66 @@
+# CI — lint, typecheck, build and the full test suite with coverage, on every
+# push to main and every pull request.
+#
+# The DB-backed suites run for real against a postgres:16 service container.
+# REQUIRE_DB=1 turns "database unreachable" from a skip into a failure, so a
+# misconfigured service cannot produce a green run that exercised none of the
+# SQL. The metering suite drives Postgres through psql (preinstalled on
+# ubuntu-latest) and needs CREATE DATABASE, which the container's superuser has.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: billing_kit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      REQUIRE_DB: 1
+      BILLING_KIT_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/billing_kit_test
+      BILLING_KIT_CLI_TEST_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test with coverage
+        run: pnpm run test:coverage
