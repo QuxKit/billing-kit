@@ -32,7 +32,7 @@ export type {
   UsageAggregation,
   UsageQuery,
 } from './events';
-export { aggregateUsage, queryUsage, record, recordMany, validateEvent } from './events';
+export { aggregateUsage, queryUsage, RECORD_MANY_MAX, record, recordMany, validateEvent } from './events';
 export type { Billing, BillingOptions } from './instance';
 export { createBilling } from './instance';
 export type { BalanceQuery, EntriesQuery } from './ledger';
@@ -41,6 +41,7 @@ export {
   assertBalanced,
   balance,
   creditNotePosting,
+  ENTRIES_MAX_ROWS,
   entries,
   paymentPosting,
   post,

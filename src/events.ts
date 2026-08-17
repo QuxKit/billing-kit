@@ -285,7 +285,22 @@ function batchKey(event: UsageEvent): string {
  *    answer this returns. If profiling ever makes that trade worth it, the
  *    staging-table version belongs behind this same signature.
  */
+/**
+ * The most events one `recordMany` call accepts. Above this the arrays bound
+ * to the multi-row INSERT stop being a batch and start being a memory and
+ * lock-time problem; a caller with more splits into calls of this size.
+ */
+export const RECORD_MANY_MAX = 1_000;
+
 export async function recordMany(db: SqlExecutor, events: readonly UsageEvent[], now: Date): Promise<RecordedEvent[]> {
+  if (events.length > RECORD_MANY_MAX) {
+    throw new BillingError({
+      code: 'batch_too_large',
+      operation: 'recordMany',
+      size: events.length,
+      max: RECORD_MANY_MAX,
+    });
+  }
   for (const event of events) validateEvent(event, now);
   if (events.length === 0) return [];
 

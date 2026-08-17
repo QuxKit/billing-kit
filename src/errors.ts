@@ -32,6 +32,13 @@ export type BillingFailure =
   | { code: 'idempotency_conflict'; operation: string; key: string; detail?: string }
   /** The dedupe claim neither inserted nor resolved. See events.ts. */
   | { code: 'dedupe_unresolved'; source: string; externalId: string }
+  /** More rows in one call than the operation accepts. Split the batch. */
+  | { code: 'batch_too_large'; operation: string; size: number; max: number }
+
+  // --- reads ---------------------------------------------------------------
+  /** A read would return (or was asked for) more rows than the hard bound.
+   *  Narrow it with `since`/`until` or page with an explicit `limit`. */
+  | { code: 'result_too_large'; what: string; max: number; requested?: number }
 
   // --- periods -------------------------------------------------------------
   | { code: 'window_sealed'; subjectId: string; metric: string; windowStart: string }
@@ -75,6 +82,12 @@ function describe(failure: BillingFailure): string {
       );
     case 'dedupe_unresolved':
       return `dedupe claim for ${failure.source}/${failure.externalId} neither inserted nor resolved`;
+    case 'batch_too_large':
+      return `${failure.operation} accepts at most ${failure.max} rows per call, got ${failure.size}`;
+    case 'result_too_large':
+      return failure.requested === undefined
+        ? `${failure.what} read exceeds the ${failure.max}-row bound; narrow the window or page with limit`
+        : `${failure.what} limit ${failure.requested} exceeds the ${failure.max}-row bound`;
     case 'window_sealed':
       return `window ${failure.windowStart} for ${failure.subjectId}/${failure.metric} is sealed`;
     case 'window_invalid':
