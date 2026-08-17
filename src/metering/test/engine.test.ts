@@ -11,10 +11,11 @@
 import assert from 'node:assert/strict';
 import { before, describe, it } from 'node:test';
 import { drain, meterBatch } from '../driver.ts';
-import { createHarness } from './harness.ts';
+import { createHarness, SKIP_REASON } from './harness.ts';
 import { createPsqlExecutor, type PsqlExecutor } from './psql-executor.ts';
 
 const h = createHarness('engine');
+const available = await h.available();
 const { createDatabase, fund, psql, reset, scalar, seed } = h;
 const TEST_DB = h.database;
 
@@ -27,7 +28,7 @@ const withDb = async <T>(fn: (db: PsqlExecutor) => Promise<T>): Promise<T> => {
   }
 };
 
-describe('metering exactness', () => {
+describe('metering exactness', { skip: available ? false : SKIP_REASON }, () => {
   before(async () => {
     await createDatabase();
   });

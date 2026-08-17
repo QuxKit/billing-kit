@@ -14,10 +14,10 @@ import { balance } from '../src/ledger';
 import { Money, Quantity, Rate } from '../src/money';
 import { definePlan } from '../src/subscriptions/plan.ts';
 import { chargeSubscriptionPeriod } from '../src/subscriptions/settle.ts';
-import { cancelSubscription, createSubscription, getSubscription } from '../src/subscriptions/store.ts';
+import { cancelSubscription, createSubscription } from '../src/subscriptions/store.ts';
 import { chargeDueSubscriptions, dueSubscriptions } from '../src/subscriptions/sweep.ts';
 import type { SqlExecutor } from '../src/types';
-import { fromPool, SKIP_REASON, TEST_DATABASE_URL } from './pg-executor';
+import { fromPool, SKIP_REASON, TEST_DATABASE_URL, unreachable } from './pg-executor';
 
 const usd = (v: string) => Money.fromDecimalString(v, 'USD');
 const q = (n: bigint) => Quantity.fromBigInt(n);
@@ -29,8 +29,9 @@ async function setup(): Promise<{ db: SqlExecutor; close(): Promise<void> } | nu
   const pool = new pg.Pool({ connectionString: TEST_DATABASE_URL, max: 4 });
   try {
     await pool.query('SELECT 1');
-  } catch {
+  } catch (error) {
     await pool.end().catch(() => {});
+    unreachable(SKIP_REASON, error);
     return null;
   }
   const ddl = (f: string) => readFile(fileURLToPath(new URL(`../sql/${f}`, import.meta.url)), 'utf8');
@@ -125,7 +126,7 @@ describe('subscriptions persistence', { skip: harness === null ? SKIP_REASON : f
       'SELECT count(*)::text AS n FROM billing.subscription_periods WHERE subscription_id = $1',
       [sub.id],
     );
-    assert.equal(periods[0]!.n, '1', 'exactly one period row');
+    assert.equal(periods[0].n, '1', 'exactly one period row');
   });
 
   it('waives base and seats during the trial, then activates', async () => {
@@ -176,7 +177,7 @@ describe('subscriptions persistence', { skip: harness === null ? SKIP_REASON : f
 
     const due = await dueSubscriptions(db, { tenantId: 'sweep', now: NOW });
     assert.equal(due.length, 1);
-    assert.equal(due[0]!.id, dueSub.id);
+    assert.equal(due[0].id, dueSub.id);
 
     const report = await chargeDueSubscriptions(db, {
       tenantId: 'sweep',
@@ -185,7 +186,7 @@ describe('subscriptions persistence', { skip: harness === null ? SKIP_REASON : f
     });
     assert.equal(report.swept, 1);
     assert.equal(report.charged, 1);
-    assert.equal(report.items[0]!.subscriptionId, dueSub.id);
+    assert.equal(report.items[0].subscriptionId, dueSub.id);
 
     // Idempotent: a second fire finds nothing due (the first advanced it a month).
     const second = await chargeDueSubscriptions(db, {

@@ -30,6 +30,8 @@ import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
+import { unreachable } from './pg-executor';
+
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const BIN = path.join(REPO, 'dist', 'cli.mjs');
 
@@ -112,8 +114,9 @@ before(async () => {
   try {
     await client.connect();
     admin = client;
-  } catch {
+  } catch (error) {
     await client.end().catch(() => {});
+    unreachable(SKIP_REASON, error);
   }
 });
 

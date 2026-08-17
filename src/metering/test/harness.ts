@@ -17,6 +17,9 @@
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { REQUIRE_DB, SKIP_REASON } from './pg-env.ts';
+
+export { REQUIRE_DB, SKIP_REASON } from './pg-env.ts';
 
 const exec = promisify(execFile);
 
@@ -48,6 +51,12 @@ export interface SeedOptions {
 
 export interface Harness {
   database: string;
+  /**
+   * Probe the server. False means the DB-backed suite should skip (with
+   * SKIP_REASON); under REQUIRE_DB an unreachable server throws instead, so CI
+   * cannot go green having run none of this.
+   */
+  available(): Promise<boolean>;
   /** Drop, recreate, apply sql/010..013, and create partitions. */
   createDatabase(): Promise<void>;
   /** Empty the data, keep the schema. */
@@ -110,6 +119,18 @@ export const createHarness = (name: string): Harness => {
 
   return {
     database,
+
+    available: async (): Promise<boolean> => {
+      try {
+        await exec('psql', ['-X', '-q', '-A', '-t', '-d', 'postgres', '-c', 'SELECT 1']);
+        return true;
+      } catch (error) {
+        if (REQUIRE_DB) {
+          throw new Error(`REQUIRE_DB is set and the test database is unreachable: ${SKIP_REASON}`, { cause: error });
+        }
+        return false;
+      }
+    },
 
     createDatabase: async (): Promise<void> => {
       await exec('psql', ['-X', '-q', '-d', 'postgres', '-c', `DROP DATABASE IF EXISTS ${database}`]);

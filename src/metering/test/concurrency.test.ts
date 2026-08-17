@@ -22,10 +22,11 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { meterBatch } from '../driver.ts';
-import { createHarness } from './harness.ts';
+import { createHarness, SKIP_REASON } from './harness.ts';
 import { createPsqlExecutor, type PsqlExecutor } from './psql-executor.ts';
 
 const h = createHarness('concurrency');
+const available = await h.available();
 const { createDatabase, psql, reset, scalar, seed } = h;
 const TEST_DB = h.database;
 
@@ -68,7 +69,7 @@ const workUntilDrained = async (db: PsqlExecutor): Promise<{ batches: number; it
   return { batches, items };
 };
 
-describe('metering under concurrency', () => {
+describe('metering under concurrency', { skip: available ? false : SKIP_REASON }, () => {
   before(async () => {
     await createDatabase();
   });
