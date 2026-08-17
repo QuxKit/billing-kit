@@ -100,20 +100,26 @@ export function chargeForPeriod(plan: Plan, input: PeriodChargeInput = {}): Peri
   const prorate = (m: Money): Money =>
     pro && pro.activeDays < pro.periodDays ? scaleFraction(m, BigInt(pro.activeDays), BigInt(pro.periodDays)) : m;
 
+  // Zero-day prorations (a period closed the day it began) produce no line:
+  // a base fee of 0.00 is not a fee, and an invoice should not show one.
   if (!trial && !plan.flat.isZero()) {
-    lines.push({ kind: 'flat', description: `${plan.id} base`, amount: prorate(plan.flat) });
+    const amount = prorate(plan.flat);
+    if (!amount.isZero()) lines.push({ kind: 'flat', description: `${plan.id} base`, amount });
   }
 
   if (!trial && plan.seats) {
     const count = Math.max(input.seats ?? 0, plan.seats.min ?? 0);
     if (count > 0) {
       const gross = plan.seats.unit.timesInteger(BigInt(count));
-      lines.push({
-        kind: 'seats',
-        description: `${count} seat${count === 1 ? '' : 's'}`,
-        amount: prorate(gross),
-        quantity: Quantity.fromBigInt(BigInt(count)),
-      });
+      const amount = prorate(gross);
+      if (!amount.isZero()) {
+        lines.push({
+          kind: 'seats',
+          description: `${count} seat${count === 1 ? '' : 's'}`,
+          amount,
+          quantity: Quantity.fromBigInt(BigInt(count)),
+        });
+      }
     }
   }
 

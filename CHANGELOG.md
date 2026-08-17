@@ -7,6 +7,15 @@ All notable changes to `@quxkit/billing-kit` are recorded here. The format is
 ## [Unreleased]
 
 ### Added
+- `changePlan(db, { tenantId, subscriptionId, from, to, behaviour, at?, seats?,
+  usage? })` (`sql/032_plan_changes.sql`): `immediate` closes the current
+  period at `at` on the old plan (prorated fees + usage, one balanced posting,
+  an invoiceable period row) and restarts the remainder on the new plan,
+  prorated by the sweep at period end; `period_end` sets `pending_plan_id`,
+  applied at the next advance. Idempotent on `(subscription, effectiveAt)` via
+  `billing.plan_changes`. `chargeSubscriptionPeriod` gains `closeAt`/
+  `nextPlanId` and auto-prorates short periods (`prorationFor` exported);
+  zero-amount fee lines are dropped.
 - `@quxkit/billing-kit/entitlements`: `definePlan` gains
   `features: { [key]: true | { limit, meter, method?, overage? } }`;
   `check(db, { tenantId, subjectId, feature, plan, at? })` →

@@ -7,6 +7,8 @@
 // one.
 
 import type { Clock, SqlExecutor, TenantId } from '../types.ts';
+import type { ChangePlanInput, ChangePlanResult } from './change.ts';
+import { changePlan } from './change.ts';
 import type { ChargePeriodInput, ChargePeriodResult } from './settle.ts';
 import { chargeSubscriptionPeriod } from './settle.ts';
 import type { CreateSubscriptionInput, SubscriptionRef } from './store.ts';
@@ -32,6 +34,8 @@ export interface Subscriptions {
   dueSubscriptions(query?: DueQuery): Promise<Subscription[]>;
   /** Charge everything due. The one call an authenticated cron endpoint makes. */
   chargeDueSubscriptions(opts: SweepOptions): Promise<SweepReport>;
+  /** Move to another plan, now (prorated) or at period end. */
+  changePlan(input: ChangePlanInput): Promise<ChangePlanResult>;
 }
 
 export function createSubscriptions(opts: SubscriptionsOptions): Subscriptions {
@@ -45,5 +49,6 @@ export function createSubscriptions(opts: SubscriptionsOptions): Subscriptions {
     chargeSubscriptionPeriod: (input) => chargeSubscriptionPeriod(db, { ...input, now: input.now ?? clock() }),
     dueSubscriptions: (query) => dueSubscriptions(db, { ...query, now: query?.now ?? clock() }),
     chargeDueSubscriptions: (opts) => chargeDueSubscriptions(db, { ...opts, now: opts.now ?? clock() }),
+    changePlan: (input) => changePlan(db, { ...input, now: input.now ?? clock() }),
   };
 }

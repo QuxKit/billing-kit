@@ -34,7 +34,7 @@ import { BillingError } from '../errors.ts';
 import type { Money, Quantity } from '../money.ts';
 import type { SqlExecutor, TenantId } from '../types.ts';
 import { chargeSubscriptionPeriod } from './settle.ts';
-import { type SubscriptionRow, toSubscription } from './store.ts';
+import { SUBSCRIPTION_COLUMNS, type SubscriptionRow, toSubscription } from './store.ts';
 import type { Plan, Subscription } from './types.ts';
 
 export interface DueQuery {
@@ -46,11 +46,7 @@ export interface DueQuery {
   limit?: number;
 }
 
-const COLUMNS = `id, tenant_id, subject_id, key, plan_id, currency, state, seats,
-       current_period_start, current_period_end, trial_end, started_at,
-       canceled_at, cancel_at_period_end`;
-
-const SELECT = `SELECT ${COLUMNS} FROM billing.subscriptions`;
+const SELECT = `SELECT ${SUBSCRIPTION_COLUMNS} FROM billing.subscriptions`;
 
 /**
  * The subscriptions whose current period has ended and are not canceled,

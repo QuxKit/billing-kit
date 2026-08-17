@@ -19,7 +19,7 @@ import { walletBalance } from '../ledger.ts';
 import type { Money, Quantity } from '../money.ts';
 import { Quantity as Q } from '../money.ts';
 import { addInterval } from '../subscriptions/plan.ts';
-import { type SubscriptionRow, toSubscription } from '../subscriptions/store.ts';
+import { SUBSCRIPTION_COLUMNS, type SubscriptionRow, toSubscription } from '../subscriptions/store.ts';
 import type { Plan, PlanFeature, Subscription } from '../subscriptions/types.ts';
 import type { Clock, SqlExecutor, SubjectId, TenantId } from '../types.ts';
 
@@ -68,10 +68,7 @@ export interface Entitlement {
   period?: { start: Date; end: Date };
 }
 
-const SELECT = `SELECT id, tenant_id, subject_id, key, plan_id, currency, state, seats,
-       current_period_start, current_period_end, trial_end, started_at,
-       canceled_at, cancel_at_period_end
-  FROM billing.subscriptions`;
+const SELECT = `SELECT ${SUBSCRIPTION_COLUMNS} FROM billing.subscriptions`;
 
 /**
  * The subscription active for a subject at an instant: started, not canceled

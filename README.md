@@ -96,6 +96,7 @@ system*. Everything below is how it earns the word "correct."
 | Webhook → ledger (`applyVerifiedEvent`, replay guard) | `billing-kit/providers` | ✅ implemented, tested |
 | Invoices — numbering, state machine, JSON/HTML render | `billing-kit/invoices` | ✅ implemented, tested (no PDF) |
 | Entitlements — feature gates, metered allowances, overage rules | `billing-kit/entitlements` | ✅ implemented, tested |
+| Plan change with automatic proration | `billing-kit/subscriptions` | ✅ implemented, tested |
 
 Metering, subscriptions and providers are **separate entry points**, not
 re-exports from the root, so an application using one does not compile the
@@ -490,6 +491,38 @@ worker holds is reported under `locked` rather than charged twice, and a charge
 that fails is **retried with backoff** (`retry: { retries, backoffMs }`, default
 two retries from 100 ms) before it lands in `errors` with its `attempts` count —
 and its row stays due for the next fire.
+
+### Changing plan
+
+billing-kit charges in arrears, so a mid-period change never credits an
+already-paid period; it splits the period being lived. `changePlan` with
+`behaviour: 'immediate'` closes the current period at `at` on the old plan —
+fees prorated to `activeDays/periodDays`, usage so far priced at the old rates,
+one balanced accrual posting, one period row that `invoiceForPeriod` can
+invoice — and restarts the remainder on the new plan, which the sweep charges
+at period end prorated to its days. Whole days, floored from the front, so the
+two halves sum to exactly the period: no day billed twice, none dropped.
+
+```ts
+import { changePlan } from '@quxkit/billing-kit/subscriptions';
+
+await changePlan(db, {
+  tenantId: 'acme', subscriptionId,
+  from: basic, to: pro,
+  behaviour: 'immediate',            // or 'period_end'
+  at: new Date('2026-08-16'),        // 15 days on basic, 16 on pro (of 31)
+  usage: { requests: q(500n) },      // usage so far, billed now at basic's rates
+});
+// { subscription, closed: { charge, transaction, ... }, proration: { periodDays: 31, oldDays: 15, newDays: 16 } }
+```
+
+`behaviour: 'period_end'` sets `pending_plan_id`; the next advance applies it,
+so the customer keeps the plan they are in until the period ends. A same-day
+change (at the period start) switches with nothing to close. Changes are
+recorded in `billing.plan_changes` (`sql/032_plan_changes.sql`) and are
+idempotent on `(subscription, effectiveAt)` — the retry of an applied change is
+a no-op even after the period advanced. Cross-interval changes are refused;
+cancel and resubscribe.
 
 ## Entitlements
 

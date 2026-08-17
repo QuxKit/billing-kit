@@ -143,6 +143,8 @@ export interface Subscription {
   /** The caller's idempotency key for creation. Unique per tenant. */
   key: string;
   planId: string;
+  /** A period-end plan change waiting for the next advance. */
+  pendingPlanId: string | null;
   currency: string;
   state: SubscriptionState;
   seats: number;

@@ -598,7 +598,20 @@ be a copy of those four that goes stale the first time a sweep advances a period
 without touching it. The period measured is the one containing `at`, stepped
 forward from the subscription's current period when the sweep is late.
 
-### 4.9 What replay actually means
+### 4.9 Plan changes
+
+Arrears billing means a mid-period change splits the period being lived rather
+than crediting one already paid. `changePlan('immediate')` closes the head at
+`at` on the old plan — `chargeSubscriptionPeriod` with `closeAt`, fees prorated
+by whole days floored from the front — and restarts `[at, periodEnd)` on the new
+plan; the sweep prorates that tail automatically (`prorationFor`), and head +
+tail always sum to the full period. `period_end` writes `pending_plan_id`,
+applied by the advance. `billing.plan_changes`, unique on
+`(subscription_id, effective_at)`, is both the audit trail and the idempotency
+claim, checked before the period-bounds test so the retry of an applied change
+is a no-op even after the period has advanced.
+
+### 4.10 What replay actually means
 
 Given `usage_events` and `price_versions`, the contents of `usage_aggregates`
 and `charges` for any **open** window are a pure function. You may delete and
