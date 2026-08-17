@@ -30,7 +30,7 @@ Usage-based billing as a library, over a provider you choose.
 
 _Rendered diagrams (mermaid): [docs/DIAGRAMS.md](https://github.com/QuxKit/billing-kit/blob/main/docs/DIAGRAMS.md)._
 
-billing-kit owns everything left of `settle` — the teal boxes. The provider owns
+billing-kit owns everything left of `settle` — the framed boxes. The provider owns
 everything right of it. That line is the whole design, and it sits there because
 it is the only place Stripe, Paddle and Lago agree on what an operation means.
 
