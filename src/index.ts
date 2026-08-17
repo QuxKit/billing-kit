@@ -96,7 +96,6 @@ export type {
   SubscriptionInput,
   SubscriptionStatus,
   TenantId,
-  UsageAggregate,
   UsageEvent,
   UsageWindow,
   VerifiedEvent,

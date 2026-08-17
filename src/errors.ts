@@ -41,13 +41,10 @@ export type BillingFailure =
   | { code: 'result_too_large'; what: string; max: number; requested?: number }
 
   // --- periods -------------------------------------------------------------
-  | { code: 'window_sealed'; subjectId: string; metric: string; windowStart: string }
   | { code: 'window_invalid'; reason: string }
 
   // --- ledger --------------------------------------------------------------
   | { code: 'unbalanced_transaction'; currency: string; residualMinor: string }
-  | { code: 'ledger_immutable'; attempted: string }
-  | { code: 'account_currency_mismatch'; account: string; expected: string; got: string }
 
   // --- general -------------------------------------------------------------
   | { code: 'not_found'; what: string; id: string }
@@ -88,16 +85,10 @@ function describe(failure: BillingFailure): string {
       return failure.requested === undefined
         ? `${failure.what} read exceeds the ${failure.max}-row bound; narrow the window or page with limit`
         : `${failure.what} limit ${failure.requested} exceeds the ${failure.max}-row bound`;
-    case 'window_sealed':
-      return `window ${failure.windowStart} for ${failure.subjectId}/${failure.metric} is sealed`;
     case 'window_invalid':
       return `invalid window: ${failure.reason}`;
     case 'unbalanced_transaction':
       return `ledger transaction does not sum to zero in ${failure.currency}: residual ${failure.residualMinor}`;
-    case 'ledger_immutable':
-      return `the ledger is append-only; ${failure.attempted} is not supported`;
-    case 'account_currency_mismatch':
-      return `account ${failure.account} holds ${failure.expected}, got ${failure.got}`;
     case 'not_found':
       return `no ${failure.what} with id ${failure.id}`;
     case 'provider_error':

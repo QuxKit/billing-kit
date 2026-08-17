@@ -114,19 +114,6 @@ export interface UsageWindow {
   end: Date;
 }
 
-export interface UsageAggregate {
-  id: string;
-  tenantId: TenantId;
-  subjectId: SubjectId;
-  metric: string;
-  window: UsageWindow;
-  quantity: Quantity;
-  eventCount: number;
-  sealedAt: Date | null;
-  /** Set when this row is a late correction to an already sealed window. */
-  adjustsWindowStart: Date | null;
-}
-
 // --- ledger -----------------------------------------------------------------
 
 /**
