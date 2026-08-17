@@ -22,7 +22,7 @@ flowchart LR
         chg -->|post| led
     end
 
-    subgraph PV["provider — Stripe / Paddle / Lago"]
+    subgraph PV["provider — Stripe / Paddle"]
         inv["invoice + capture"]
         hook[["webhook"]]
     end
