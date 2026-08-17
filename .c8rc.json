@@ -5,5 +5,8 @@
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/tests/**", "src/**/test/**", "src/**/*.test.ts"],
   "reports-dir": "coverage",
-  "check-coverage": false
+  "check-coverage": true,
+  "lines": 80,
+  "functions": 85,
+  "branches": 75
 }
