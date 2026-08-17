@@ -1,38 +1,34 @@
-# billing-kit
+# @quxkit/billing-kit
+
+**QuxKit** · blue stone · usage-based billing
 
 Usage-based billing as a library, over a provider you choose.
 
-```mermaid
-flowchart LR
-    app(["your app"])
-
-    subgraph BK["billing-kit — Apache-2.0"]
-        direction LR
-        ev[("usage_events")]
-        agg[("aggregates")]
-        chg["charges"]
-        led[("ledger<br/>append-only, double-entry")]
-        ev -->|aggregate| agg
-        agg -->|price| chg
-        chg -->|post| led
-    end
-
-    subgraph PV["provider — Stripe / Paddle / Lago"]
-        inv["invoice + capture"]
-        hook[["webhook"]]
-    end
-
-    app -->|record usage| ev
-    led -->|settle period| inv
-    hook -->|payment or refund| led
-
-    classDef own fill:#0d9488,stroke:#0f766e,color:#ffffff;
-    classDef prov fill:#d97706,stroke:#b45309,color:#ffffff;
-    classDef edge fill:#1e293b,stroke:#0f172a,color:#e2e8f0;
-    class ev,agg,chg,led own;
-    class inv,hook prov;
-    class app edge;
 ```
+   your app
+      │ record usage
+      ▼
+ ┌─────────────────────────────────────────────────────────────┐
+ │  usage_events ──aggregate──▶ aggregates ──price──▶ charges  │
+ │                                                        │    │
+ │                                                      post   │
+ │                                                        ▼    │
+ │                        ledger — append-only, double-entry   │
+ └─────────────────────────────────────────────────────────────┘
+   @quxkit/billing-kit — Apache-2.0        │            ▲
+                                    settle │            │ payment
+                                    period ▼            │ or refund
+                                  ┌──────────────────────────┐
+                                  │  invoice + capture       │
+                                  │  webhook                 │
+                                  │  Stripe · Paddle · Lago  │
+                                  └──────────────────────────┘
+
+ billing-kit owns everything left of `settle`. The provider owns
+ everything right of it.
+```
+
+_Rendered diagrams (mermaid): [docs/DIAGRAMS.md](https://github.com/QuxKit/billing-kit/blob/main/docs/DIAGRAMS.md)._
 
 billing-kit owns everything left of `settle` — the teal boxes. The provider owns
 everything right of it. That line is the whole design, and it sits there because
@@ -140,7 +136,7 @@ opinions inside them.
 It is also not a tenancy system. Every ingest row carries a `tenantId`, and
 this library never verifies one — by design, it cannot. What billing-kit
 assumes about that field, and the sibling library
-([tenant-kit](http://localhost:3003/brett/tenant-kit)) that makes the
+([tenant-kit](https://github.com/QuxKit/tenant-kit)) that makes the
 assumption true — request→tenant resolution, memberships, row-level-security
 isolation over these very tables — is
 [docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md).
@@ -291,24 +287,21 @@ const { quantity } = await aggregateUsage(db, {
 Double-entry, append-only. Positive is a debit, negative is a credit, and the
 legs of a transaction sum to zero per currency.
 
-```mermaid
-flowchart TB
-    subgraph T1["charge chg_1 — two legs, sum to zero"]
-        direction LR
-        a1["customer_balance<br/>+19.99 debit"]:::debit
-        b1["revenue_accrued<br/>−19.99 credit"]:::credit
-    end
-    subgraph T2["payment webhook pay_9 — two legs, sum to zero"]
-        direction LR
-        a2["cash<br/>+19.99 debit"]:::debit
-        b2["customer_balance<br/>−19.99 credit"]:::credit
-    end
-    T1 --> T2 --> note
-    note["customer_balance = +19.99 − 19.99 = 0<br/>the charge is settled, and every row is still there"]:::note
+```
+ charge chg_1                      two legs, sum to zero
+   customer_balance     +19.99     debit
+   revenue_accrued      −19.99     credit
+                        ────────
+                          0.00  ✓
 
-    classDef debit fill:#0d9488,stroke:#0f766e,color:#ffffff;
-    classDef credit fill:#7c3aed,stroke:#6d28d9,color:#ffffff;
-    classDef note fill:#1e293b,stroke:#334155,color:#e2e8f0;
+ payment webhook pay_9             two legs, sum to zero
+   cash                 +19.99     debit
+   customer_balance     −19.99     credit
+                        ────────
+                          0.00  ✓
+
+ customer_balance = +19.99 − 19.99 = 0
+ the charge is settled, and every row is still there
 ```
 
 Cash reaches the ledger only from a verified payment webhook — there is no
@@ -567,6 +560,23 @@ real database rather than a mock because the behaviour worth testing — what
 trigger fires at the right moment, whether a partitioned table routes a row — is
 in Postgres, not in the TypeScript. A mock would only confirm that we send the
 SQL we decided to send.
+
+
+## The QuxKit family
+
+Libraries you embed, not services you operate. Each kit owns one narrow thing
+and composes with the rest over shared shapes — one executor interface, one
+opaque tenant id, one Money type.
+
+| Package | Stone | What it owns |
+|---|---|---|
+| [`@quxkit/identity-kit`](https://github.com/QuxKit/identity-kit) | gold | Accounts, argon2id credentials, revocable sessions — produces a `UserId`. |
+| [`@quxkit/tenant-kit`](https://github.com/QuxKit/tenant-kit) | green | Tenant directory, request→tenant resolution, row-level-security isolation. |
+| [`@quxkit/billing-kit`](https://github.com/QuxKit/billing-kit) | blue | Metering, exact pricing, a double-entry ledger, provider settlement. |
+| [`@quxkit/billing-kit-adapters`](https://github.com/QuxKit/billing-kit-adapters) | blue | Payment providers beyond Stripe and Paddle. |
+| [`tenant-kit-adapters`](https://github.com/QuxKit/tenant-kit-adapters) | green | Enterprise SSO, SCIM provisioning, RBAC-engine bridges. |
+| [`billing-kit-components`](https://github.com/QuxKit/billing-kit-components) | blue | shadcn-compatible billing UI, per seat. |
+| [`@quxkit/billing-kit-mcp`](https://github.com/QuxKit/billing-kit-mcp) | blue | Exact money math for AI assistants over MCP. |
 
 ## Licence
 

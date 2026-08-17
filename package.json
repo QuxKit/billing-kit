@@ -8,11 +8,11 @@
   "sideEffects": false,
   "repository": {
     "type": "git",
-    "url": "git+http://localhost:3003/brett/billing-kit.git"
+    "url": "git+https://github.com/QuxKit/billing-kit.git"
   },
-  "homepage": "http://localhost:3003/brett/billing-kit#readme",
+  "homepage": "https://github.com/QuxKit/billing-kit#readme",
   "bugs": {
-    "url": "http://localhost:3003/brett/billing-kit/issues"
+    "url": "https://github.com/QuxKit/billing-kit/issues"
   },
   "keywords": [
     "billing",
