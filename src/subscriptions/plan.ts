@@ -43,7 +43,7 @@ export function definePlan(input: Plan): Plan {
     if (!u.metric) bad('a usage component has an empty metric');
     if (seen.has(u.metric)) bad(`metric ${u.metric} appears twice`);
     seen.add(u.metric);
-    if (u.included && u.included.isNegative()) bad(`included allowance for ${u.metric} is negative`);
+    if (u.included?.isNegative()) bad(`included allowance for ${u.metric} is negative`);
   }
 
   if (input.trialDays !== undefined && (!Number.isInteger(input.trialDays) || input.trialDays < 0)) {

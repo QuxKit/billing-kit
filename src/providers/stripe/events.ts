@@ -49,7 +49,7 @@ export const str = (value: unknown, field: string): string => {
 const ref = (value: unknown): string | null => {
   if (typeof value === 'string' && value !== '') return value;
   if (typeof value === 'object' && value !== null) {
-    const id = (value as Record<string, unknown>)['id'];
+    const id = (value as Record<string, unknown>).id;
     if (typeof id === 'string') return id;
   }
   return null;
@@ -64,14 +64,14 @@ const ref = (value: unknown): string | null => {
  * than a display bug.
  */
 export const invoiceTax = (invoice: Record<string, unknown>, currency: string) => {
-  if (typeof invoice['tax'] === 'number') {
-    return optionalMoneyFromNumber(invoice['tax'], currency, STRIPE, 'invoice.tax');
+  if (typeof invoice.tax === 'number') {
+    return optionalMoneyFromNumber(invoice.tax, currency, STRIPE, 'invoice.tax');
   }
-  const list = invoice['total_taxes'];
+  const list = invoice.total_taxes;
   if (!Array.isArray(list) || list.length === 0) return null;
   let total = 0;
   for (const entry of list) {
-    const amount = (entry as Record<string, unknown>)?.['amount'];
+    const amount = (entry as Record<string, unknown>)?.amount;
     if (typeof amount !== 'number' || !Number.isSafeInteger(amount)) {
       throw new ProviderError({
         kind: 'malformed_response',
@@ -114,9 +114,9 @@ const subscriptionStatus = (value: unknown): SubscriptionStatus => {
  */
 export const normaliseStripeEvent = (payload: unknown): VerifiedEvent => {
   const event = object(payload);
-  const providerEventId = str(event['id'], 'id');
-  const kind = str(event['type'], 'type');
-  const created = event['created'];
+  const providerEventId = str(event.id, 'id');
+  const kind = str(event.type, 'type');
+  const created = event.created;
   if (typeof created !== 'number' || !Number.isSafeInteger(created)) {
     throw new ProviderError({
       kind: 'malformed_response',
@@ -129,17 +129,17 @@ export const normaliseStripeEvent = (payload: unknown): VerifiedEvent => {
   // arrival time, because webhooks are delivered out of order as a matter of
   // course and a void that overtakes its finalize must not resurrect anything.
   const base = { providerEventId, occurredAt: new Date(created * 1000), raw: payload };
-  const data = object(object(event['data'])['object']);
+  const data = object(object(event.data).object);
 
   switch (kind) {
     case 'invoice.payment_succeeded':
     case 'invoice.paid': {
-      const currency = normaliseCurrency(data['currency'], STRIPE, 'invoice.currency');
+      const currency = normaliseCurrency(data.currency, STRIPE, 'invoice.currency');
       return {
         ...base,
         kind: 'payment.succeeded',
-        settlementRef: str(data['id'], 'invoice.id'),
-        amount: moneyFromNumber(data['amount_paid'], currency, STRIPE, 'invoice.amount_paid'),
+        settlementRef: str(data.id, 'invoice.id'),
+        amount: moneyFromNumber(data.amount_paid, currency, STRIPE, 'invoice.amount_paid'),
       };
     }
 
@@ -147,39 +147,39 @@ export const normaliseStripeEvent = (payload: unknown): VerifiedEvent => {
       return {
         ...base,
         kind: 'payment.failed',
-        settlementRef: str(data['id'], 'invoice.id'),
+        settlementRef: str(data.id, 'invoice.id'),
         reason:
-          typeof data['last_finalization_error'] === 'object' && data['last_finalization_error'] !== null
-            ? String((data['last_finalization_error'] as Record<string, unknown>)['message'] ?? 'payment_failed')
+          typeof data.last_finalization_error === 'object' && data.last_finalization_error !== null
+            ? String((data.last_finalization_error as Record<string, unknown>).message ?? 'payment_failed')
             : 'payment_failed',
       };
 
     case 'invoice.finalized': {
-      const currency = normaliseCurrency(data['currency'], STRIPE, 'invoice.currency');
+      const currency = normaliseCurrency(data.currency, STRIPE, 'invoice.currency');
       return {
         ...base,
         kind: 'settlement.finalized',
-        settlementRef: str(data['id'], 'invoice.id'),
-        total: moneyFromNumber(data['total'], currency, STRIPE, 'invoice.total'),
+        settlementRef: str(data.id, 'invoice.id'),
+        total: moneyFromNumber(data.total, currency, STRIPE, 'invoice.total'),
         tax: invoiceTax(data, currency),
       };
     }
 
     case 'invoice.voided':
-      return { ...base, kind: 'settlement.voided', settlementRef: str(data['id'], 'invoice.id') };
+      return { ...base, kind: 'settlement.voided', settlementRef: str(data.id, 'invoice.id') };
 
     case 'refund.created':
     case 'refund.updated':
     case 'charge.refund.updated': {
-      const currency = normaliseCurrency(data['currency'], STRIPE, 'refund.currency');
-      const status = data['status'];
-      const refundRef = str(data['id'], 'refund.id');
+      const currency = normaliseCurrency(data.currency, STRIPE, 'refund.currency');
+      const status = data.status;
+      const refundRef = str(data.id, 'refund.id');
       if (status === 'failed' || status === 'canceled') {
         return {
           ...base,
           kind: 'refund.declined',
           refundRef,
-          reason: typeof data['failure_reason'] === 'string' ? data['failure_reason'] : String(status),
+          reason: typeof data.failure_reason === 'string' ? data.failure_reason : String(status),
         };
       }
       if (status !== 'succeeded') {
@@ -191,8 +191,8 @@ export const normaliseStripeEvent = (payload: unknown): VerifiedEvent => {
         ...base,
         kind: 'refund.settled',
         refundRef,
-        settlementRef: ref(data['invoice']),
-        amount: moneyFromNumber(data['amount'], currency, STRIPE, 'refund.amount'),
+        settlementRef: ref(data.invoice),
+        amount: moneyFromNumber(data.amount, currency, STRIPE, 'refund.amount'),
       };
     }
 
@@ -204,8 +204,8 @@ export const normaliseStripeEvent = (payload: unknown): VerifiedEvent => {
       return {
         ...base,
         kind: 'subscription.changed',
-        subscriptionRef: str(data['id'], 'subscription.id'),
-        status: kind === 'customer.subscription.deleted' ? 'canceled' : subscriptionStatus(data['status']),
+        subscriptionRef: str(data.id, 'subscription.id'),
+        status: kind === 'customer.subscription.deleted' ? 'canceled' : subscriptionStatus(data.status),
       };
 
     default:

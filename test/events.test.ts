@@ -136,7 +136,7 @@ describe('ingest', { skip: harness === null ? SKIP_REASON : false }, () => {
     });
     const mine = stored.filter((s) => s.externalId === event.externalId);
     assert.equal(mine.length, 1, 'nothing was double-billed');
-    assert.equal(mine[0]!.quantity.toDecimalString(), '100.000000000000', 'and nothing was overwritten');
+    assert.equal(mine[0].quantity.toDecimalString(), '100.000000000000', 'and nothing was overwritten');
   });
 
   it('does not mind metadata changing between a call and its retry', async () => {
@@ -318,7 +318,7 @@ describe('ingest', { skip: harness === null ? SKIP_REASON : false }, () => {
         WHERE e.external_id = $1`,
       [event.externalId],
     );
-    assert.match(where[0]!.relname, /_default$/, 'a backdated event belongs in the default partition');
+    assert.match(where[0].relname, /_default$/, 'a backdated event belongs in the default partition');
   });
 });
 
@@ -348,7 +348,7 @@ describe('recordMany', { skip: harness === null ? SKIP_REASON : false }, () => {
       results.map((r) => r.deduplicated),
       [false, false, true],
     );
-    assert.equal(results[0]!.eventId, results[2]!.eventId);
+    assert.equal(results[0].eventId, results[2].eventId);
 
     const stored = await h.db.query<{ count: string }>(
       'SELECT count(*)::text AS count FROM billing.usage_events WHERE external_id = $1',
@@ -379,7 +379,7 @@ describe('recordMany', { skip: harness === null ? SKIP_REASON : false }, () => {
     );
     const idByExternal = new Map(stored.map((s) => [s.external_id, s.id]));
     for (let i = 0; i < events.length; i++) {
-      assert.equal(results[i]!.eventId, idByExternal.get(events[i]!.externalId));
+      assert.equal(results[i].eventId, idByExternal.get(events[i].externalId));
     }
   });
 

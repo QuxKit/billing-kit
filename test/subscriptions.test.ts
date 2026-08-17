@@ -41,7 +41,7 @@ describe('chargeForPeriod', () => {
       c.lines.map((l) => l.kind),
       ['flat', 'seats', 'usage'],
     );
-    assert.equal(c.lines.find((l) => l.kind === 'usage')!.amount.minor, 60n);
+    assert.equal(c.lines.find((l) => l.kind === 'usage')?.amount.minor, 60n);
   });
 
   it('does not charge below the included allowance', () => {
@@ -163,7 +163,8 @@ describe('discounts and coupons', () => {
     });
     // 7960 subtotal − 1592 = 6368
     assert.equal(c.total.minor, 6368n);
-    const line = c.lines.find((l) => l.kind === 'discount')!;
+    const line = c.lines.find((l) => l.kind === 'discount');
+    assert.ok(line);
     assert.equal(line.amount.minor, -1592n);
   });
 

@@ -273,7 +273,7 @@ function parseDecimal(value: string, what: string): ParsedDecimal {
   let sawDigit = false;
 
   for (; i < value.length; i++) {
-    const c = value[i]!;
+    const c = value[i];
     if (c >= '0' && c <= '9') {
       intPart += c;
       sawDigit = true;
@@ -283,7 +283,7 @@ function parseDecimal(value: string, what: string): ParsedDecimal {
   if (value[i] === '.') {
     i++;
     for (; i < value.length; i++) {
-      const c = value[i]!;
+      const c = value[i];
       if (c >= '0' && c <= '9') {
         fracPart += c;
         sawDigit = true;
@@ -306,7 +306,7 @@ function parseDecimal(value: string, what: string): ParsedDecimal {
     }
     let expDigits = '';
     for (; i < value.length; i++) {
-      const c = value[i]!;
+      const c = value[i];
       if (c >= '0' && c <= '9') expDigits += c;
       else break;
     }
@@ -799,7 +799,7 @@ function assertTiers(tiers: readonly Tier[], currency: string): void {
   }
   let previous: bigint | null = null;
   for (let i = 0; i < tiers.length; i++) {
-    const tier = tiers[i]!;
+    const tier = tiers[i];
     const isLast = i === tiers.length - 1;
     if (tier.flat && tier.flat.currency !== currency) {
       throw new BillingError({
@@ -854,6 +854,7 @@ export function priceTiered(
 
   if (mode === 'volume') {
     // The whole quantity at the rate of the tier it lands in.
+    // biome-ignore lint/style/noNonNullAssertion: validateTiers guarantees the last tier is open-ended
     const tier = tiers.find((t) => t.upTo === null || q <= t.upTo.units)!;
     productUnits += q * tier.rate.units;
     if (tier.flat) productUnits += tier.flat.minor * PRODUCT_UNIT;
@@ -934,8 +935,8 @@ export function allocate(amount: Money, weights: readonly bigint[]): Money[] {
   const order = shares
     .map((_s, i) => i)
     .sort((a, b) => {
-      const ra = remainders[a]!;
-      const rb = remainders[b]!;
+      const ra = remainders[a];
+      const rb = remainders[b];
       if (ra !== rb) return ra > rb ? -1 : 1;
       return a - b;
     });
@@ -945,7 +946,7 @@ export function allocate(amount: Money, weights: readonly bigint[]): Money[] {
   let leftover = magnitude - allocated;
   for (const i of order) {
     if (leftover === 0n) break;
-    shares[i] = shares[i]! + 1n;
+    shares[i] = shares[i] + 1n;
     leftover -= 1n;
   }
 

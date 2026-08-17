@@ -105,7 +105,9 @@ export const formEncode = (input: Record<string, unknown>): string => {
       return;
     }
     if (Array.isArray(value)) {
-      value.forEach((item, index) => walk(`${prefix}[${index}]`, item));
+      value.forEach((item, index) => {
+        walk(`${prefix}[${index}]`, item);
+      });
       return;
     }
     if (typeof value === 'object') {
@@ -312,15 +314,15 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
 const extractCode = (body: unknown): string | undefined => {
   const root = asRecord(body);
   if (!root) return undefined;
-  const nested = asRecord(root['error']);
-  const code = nested?.['code'] ?? nested?.['type'] ?? root['code'] ?? root['type'];
+  const nested = asRecord(root.error);
+  const code = nested?.code ?? nested?.type ?? root.code ?? root.type;
   return typeof code === 'string' ? code : undefined;
 };
 
 const extractMessage = (body: unknown): string | undefined => {
   const root = asRecord(body);
   if (!root) return undefined;
-  const nested = asRecord(root['error']);
-  const message = nested?.['detail'] ?? nested?.['message'] ?? root['message'] ?? root['detail'];
+  const nested = asRecord(root.error);
+  const message = nested?.detail ?? nested?.message ?? root.message ?? root.detail;
   return typeof message === 'string' ? message : undefined;
 };

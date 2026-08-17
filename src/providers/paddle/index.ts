@@ -150,15 +150,15 @@ const subscriptionStatus = (value: unknown): SubscriptionStatus => {
 };
 
 /** Paddle wraps every response in `{ data, meta }`. */
-const dataOf = (payload: unknown): unknown => object(payload)['data'];
+const dataOf = (payload: unknown): unknown => object(payload).data;
 
 const listOf = (payload: unknown): unknown[] => {
-  const data = object(payload)['data'];
+  const data = object(payload).data;
   return Array.isArray(data) ? data : [];
 };
 
 const customData = (record: Record<string, unknown>): Record<string, unknown> => {
-  const custom = record['custom_data'];
+  const custom = record.custom_data;
   return typeof custom === 'object' && custom !== null ? (custom as Record<string, unknown>) : {};
 };
 
@@ -206,23 +206,23 @@ export const createPaddleProvider = (config: PaddleConfig): BillingProvider<Padd
     const record = object(raw);
     const custom = customData(record);
     return {
-      id: str(record['id'], 'customer.id') as ProviderCustomerId,
+      id: str(record.id, 'customer.id') as ProviderCustomerId,
       key: typeof custom[subjectKey] === 'string' ? (custom[subjectKey] as string) : null,
-      email: typeof record['email'] === 'string' ? record['email'] : null,
+      email: typeof record.email === 'string' ? record.email : null,
       raw,
     };
   };
 
   const toSubscription = (raw: unknown): ProviderSubscription => {
     const record = object(raw);
-    const period = record['current_billing_period'];
+    const period = record.current_billing_period;
     const bounds = typeof period === 'object' && period !== null ? (period as Record<string, unknown>) : null;
     return {
-      id: str(record['id'], 'subscription.id') as ProviderSubscriptionId,
-      status: subscriptionStatus(record['status']),
+      id: str(record.id, 'subscription.id') as ProviderSubscriptionId,
+      status: subscriptionStatus(record.status),
       currentPeriod:
-        bounds && typeof bounds['starts_at'] === 'string' && typeof bounds['ends_at'] === 'string'
-          ? { start: new Date(bounds['starts_at']), end: new Date(bounds['ends_at']) }
+        bounds && typeof bounds.starts_at === 'string' && typeof bounds.ends_at === 'string'
+          ? { start: new Date(bounds.starts_at), end: new Date(bounds.ends_at) }
           : null,
       raw,
     };
@@ -230,16 +230,16 @@ export const createPaddleProvider = (config: PaddleConfig): BillingProvider<Padd
 
   const toSettlement = (raw: unknown): SettlementResult => {
     const transaction = object(raw);
-    const currency = String(transaction['currency_code'] ?? '').toUpperCase();
-    const details = transaction['details'];
+    const currency = String(transaction.currency_code ?? '').toUpperCase();
+    const details = transaction.details;
     const totals =
       typeof details === 'object' && details !== null
-        ? ((details as Record<string, unknown>)['totals'] as Record<string, unknown> | undefined)
+        ? ((details as Record<string, unknown>).totals as Record<string, unknown> | undefined)
         : undefined;
 
     return {
-      ref: str(transaction['id'], 'transaction.id') as ProviderSettlementId,
-      status: settlementStatus(transaction['status']),
+      ref: str(transaction.id, 'transaction.id') as ProviderSettlementId,
+      status: settlementStatus(transaction.status),
       // Null here is the normal answer, not a failure. Paddle has not priced
       // the transaction yet; the real number arrives on `settlement.finalized`.
       // Defaulting it to zero would post a zero-revenue period that reconciles
@@ -247,11 +247,9 @@ export const createPaddleProvider = (config: PaddleConfig): BillingProvider<Padd
       providerTotal:
         totals === undefined
           ? null
-          : optionalMoneyFromMinorString(totals['total'], currency, PADDLE, 'details.totals.total'),
+          : optionalMoneyFromMinorString(totals.total, currency, PADDLE, 'details.totals.total'),
       providerTax:
-        totals === undefined
-          ? null
-          : optionalMoneyFromMinorString(totals['tax'], currency, PADDLE, 'details.totals.tax'),
+        totals === undefined ? null : optionalMoneyFromMinorString(totals.tax, currency, PADDLE, 'details.totals.tax'),
       raw,
     };
   };
@@ -348,12 +346,12 @@ export const createPaddleProvider = (config: PaddleConfig): BillingProvider<Padd
       method: 'GET',
       path: `/subscriptions/${subscriptionId}`,
     });
-    const items = object(dataOf(raw))['items'];
+    const items = object(dataOf(raw)).items;
     if (!Array.isArray(items)) return null;
     for (const entry of items) {
-      const price = object(object(entry)['price'] ?? {});
+      const price = object(object(entry).price ?? {});
       if (customData(price)[metricKey] !== metric) continue;
-      return { id: str(price['id'], 'price.id') as ProviderItemId, metric, raw: price };
+      return { id: str(price.id, 'price.id') as ProviderItemId, metric, raw: price };
     }
     return null;
   };
@@ -424,7 +422,7 @@ export const createPaddleProvider = (config: PaddleConfig): BillingProvider<Padd
       }
       if (rows.length < 50) return null;
       const last = rows[rows.length - 1];
-      after = last === undefined ? undefined : str(object(last)['id'], 'transaction.id');
+      after = last === undefined ? undefined : str(object(last).id, 'transaction.id');
     }
     return null;
   };
@@ -442,7 +440,7 @@ export const createPaddleProvider = (config: PaddleConfig): BillingProvider<Padd
       const transaction = object(
         dataOf(await http.request<unknown>({ method: 'GET', path: `/transactions/${input.settlementRef}` })),
       );
-      const lines = transaction['items'];
+      const lines = transaction.items;
       if (!Array.isArray(lines) || lines.length !== 1) {
         throw new ProviderError({
           kind: 'invalid_request',
@@ -454,10 +452,10 @@ export const createPaddleProvider = (config: PaddleConfig): BillingProvider<Padd
           raw: transaction,
         });
       }
-      const detail = object(object(lines[0])['price'] ?? {});
+      const detail = object(object(lines[0]).price ?? {});
       items = [
         {
-          item_id: str(object(lines[0])['id'] ?? detail['id'], 'transaction.items[0].id'),
+          item_id: str(object(lines[0]).id ?? detail.id, 'transaction.items[0].id'),
           type: 'partial',
           amount: input.amount.minor.toString(),
         },
@@ -480,9 +478,9 @@ export const createPaddleProvider = (config: PaddleConfig): BillingProvider<Padd
       ),
     );
 
-    const status = raw['status'];
+    const status = raw.status;
     return {
-      ref: str(raw['id'], 'adjustment.id') as ProviderRefundId,
+      ref: str(raw.id, 'adjustment.id') as ProviderRefundId,
       // `pending` is the normal, successful answer here: an approver has not
       // looked at it yet. Treating it as a failure and retrying files a second
       // refund request for the same money.

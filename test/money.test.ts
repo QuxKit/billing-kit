@@ -179,6 +179,7 @@ describe('Money arithmetic', () => {
     const one = Money.fromMinor(1n, 'USD');
     assert.equal(huge.plus(one).toJSON().amount, '90071992547409911');
     // The same addition through a double silently does nothing.
+    // biome-ignore lint/correctness/noPrecisionLoss: the precision loss IS the point being demonstrated
     assert.equal(90071992547409910 + 1, 90071992547409910);
   });
 
@@ -365,7 +366,7 @@ describe('allocate', () => {
   it('splits by weight and still sums back exactly', () => {
     const parts = allocate(Money.fromMinor(1000n, 'USD'), [7n, 2n, 1n]);
     assert.equal(Money.sum(parts, 'USD').minor, 1000n);
-    assert.equal(parts[0]!.minor, 700n);
+    assert.equal(parts[0].minor, 700n);
   });
 
   it('preserves sign for a refund split', () => {
@@ -403,7 +404,7 @@ describe('allocate', () => {
         .slice()
         .sort(),
     );
-    assert.equal(backwards[0]!.minor, 10n, 'the 97 share keeps the penny wherever it sits');
+    assert.equal(backwards[0].minor, 10n, 'the 97 share keeps the penny wherever it sits');
   });
 
   it('breaks a tie by index, so two runs cannot disagree', () => {

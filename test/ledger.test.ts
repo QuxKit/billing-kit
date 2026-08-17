@@ -35,7 +35,10 @@ const NOW = new Date('2026-08-13T12:00:00Z');
 const usd = (v: string) => Money.fromDecimalString(v, 'USD');
 
 let seq = 0;
-const nextId = (prefix: string) => `${prefix}-${(seq += 1)}`;
+const nextId = (prefix: string): string => {
+  seq += 1;
+  return `${prefix}-${seq}`;
+};
 
 describe('assertBalanced', () => {
   it('accepts legs that sum to zero', () => {
@@ -140,8 +143,9 @@ describe('posting builders', () => {
     });
     const ref = refundPosting({ tenantId: 't', subjectId: 's', refundId: 'r1', amount: usd('19.99'), occurredAt: NOW });
 
-    const cashIn = pay.legs.find((l) => l.account === 'cash')!;
-    const cashOut = ref.legs.find((l) => l.account === 'cash')!;
+    const cashIn = pay.legs.find((l) => l.account === 'cash');
+    const cashOut = ref.legs.find((l) => l.account === 'cash');
+    assert.ok(cashIn && cashOut);
     assert.equal(cashIn.amount.plus(cashOut.amount).minor, 0n);
   });
 });
@@ -184,7 +188,8 @@ describe('ledger persistence', { skip: harness === null ? SKIP_REASON : false },
     // would come back with a different value.
     const amount = Money.fromMinor('9007199254740993', 'USD');
     const result = await post(h.db, accrualPosting({ tenantId: 't1', subjectId: 's-big', chargeId, amount }), NOW);
-    const debit = result.entries.find((e) => e.account === 'customer_balance')!;
+    const debit = result.entries.find((e) => e.account === 'customer_balance');
+    assert.ok(debit);
     assert.equal(debit.amount.minor, 9007199254740993n);
     assert.equal(debit.amount.toJSON().amount, '9007199254740993');
   });
@@ -437,9 +442,9 @@ describe('ledger persistence', { skip: harness === null ? SKIP_REASON : false },
 
     assert.equal(all.length, 2);
     assert.equal(onlyCash.length, 1);
-    assert.equal(onlyCash[0]!.account, 'revenue_accrued');
+    assert.equal(onlyCash[0].account, 'revenue_accrued');
     for (let i = 1; i < all.length; i++) {
-      assert.ok(all[i - 1]!.postedAt.getTime() <= all[i]!.postedAt.getTime());
+      assert.ok(all[i - 1].postedAt.getTime() <= all[i].postedAt.getTime());
     }
   });
 });
@@ -452,7 +457,7 @@ describe('partition maintenance', { skip: harness === null ? SKIP_REASON : false
       `SELECT count(*)::text AS n FROM billing.${table} WHERE subject_id = $1`,
       [subjectId],
     );
-    return Number(rows[0]!.n);
+    return Number(rows[0].n);
   };
 
   it('stores a posting outside every month partition, in the default', async () => {
@@ -524,7 +529,7 @@ describe('partition maintenance', { skip: harness === null ? SKIP_REASON : false
     assert.equal(cash.toDecimalString(), '7.50');
     const rows = await entries(h.db, { tenantId: 't1', subjectId: 'late-payment' });
     assert.equal(rows.length, 2);
-    assert.equal(rows[0]!.sourceId, paymentId);
+    assert.equal(rows[0].sourceId, paymentId);
 
     // Rows for months that still have no partition stay put rather than being
     // dragged along, and the default is still append-only afterwards: the move
@@ -565,7 +570,7 @@ describe('partition maintenance', { skip: harness === null ? SKIP_REASON : false
       SELECT count(*)::text AS bad FROM b
        WHERE lo <> (date_trunc('month', lo AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
           OR hi <> ((date_trunc('month', lo AT TIME ZONE 'UTC') + interval '1 month') AT TIME ZONE 'UTC')`);
-    assert.equal(rows[0]!.bad, '0', 'a month partition must span exactly one UTC calendar month');
+    assert.equal(rows[0].bad, '0', 'a month partition must span exactly one UTC calendar month');
   });
 });
 
@@ -575,8 +580,8 @@ describe('credit notes', () => {
     assertBalanced(note.legs);
     const bySide = Object.fromEntries(note.legs.map((l) => [l.account, l.amount.minor]));
     // accrual is customer_balance +, revenue_accrued −; a credit note is the mirror
-    assert.equal(bySide['customer_balance'], -1999n);
-    assert.equal(bySide['revenue_accrued'], 1999n);
+    assert.equal(bySide.customer_balance, -1999n);
+    assert.equal(bySide.revenue_accrued, 1999n);
   });
 
   it('refuses a negative amount', () => {

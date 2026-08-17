@@ -23,7 +23,7 @@ import test from 'node:test';
 import pg from 'pg';
 
 import { BillingError } from '../../src/errors';
-import { queryUsage, record, recordMany } from '../../src/events';
+import { queryUsage, record } from '../../src/events';
 import { accrualPosting, balance, entries, paymentPosting, post } from '../../src/ledger';
 import { allocate, Money, price, Quantity, Rate } from '../../src/money';
 import { fromPool } from '../pg-executor';
@@ -100,7 +100,7 @@ test('A2: replay with a DIFFERENT quantity is refused, not called a duplicate', 
     window: { start: new Date(now.getTime() - 86400e3), end: new Date(now.getTime() + 86400e3) },
   });
   assert.equal(stored.length, 1);
-  assert.equal(Number(stored[0]!.quantity.toDecimalString()), 10);
+  assert.equal(Number(stored[0].quantity.toDecimalString()), 10);
 
   // An identical retry is still boring, which is the contract the refusal must
   // not have broken.
@@ -210,7 +210,7 @@ test('A5: a late payment webhook posts into the default partition', async () => 
     'cash:100.00',
     'customer_balance:-100.00',
   ]);
-  assert.equal(read[0]!.postedAt.getTime(), old.getTime(), 'posted at the provider timestamp, not at arrival');
+  assert.equal(read[0].postedAt.getTime(), old.getTime(), 'posted at the provider timestamp, not at arrival');
 
   const cash = await balance(db, { tenantId: 't', subjectId: 's5', account: 'cash', currency: 'USD' });
   assert.equal(cash.toDecimalString(), '100.00');
@@ -220,7 +220,7 @@ test('A5: a late payment webhook posts into the default partition', async () => 
   const { rows } = await pool.query<{ n: string }>(
     "SELECT count(*)::text AS n FROM billing.ledger_entries_default WHERE source_id = 'pay-A5'",
   );
-  assert.equal(rows[0]!.n, '2', 'the late payment belongs in the DEFAULT partition');
+  assert.equal(rows[0].n, '2', 'the late payment belongs in the DEFAULT partition');
 });
 
 test('A6: entries() silently truncates at 500 — a re-derived balance is short', async () => {
@@ -264,13 +264,13 @@ test('A7: the two layers agree on what a rate literal means', async () => {
   // 10^exponent: money.ts read the rate as dollars and priced it 100x high.
   const p = price(Quantity.fromBigInt(1n), Rate.fromDecimalString('0.0019'), 'USD');
   const { rows } = await pool.query<{ v: string }>('SELECT (1 * 0.0019::numeric)::text AS v');
-  console.log('  money.ts exactMinor =', p.exactMinor, '| sql =', rows[0]!.v);
+  console.log('  money.ts exactMinor =', p.exactMinor, '| sql =', rows[0].v);
   // Compared by value, not by string: exactMinor is zero-padded to full scale,
   // and the invariant under test is that the two layers price a rate the same,
   // not that they format a decimal the same.
   assert.equal(
     Number(p.exactMinor),
-    Number(rows[0]!.v),
+    Number(rows[0].v),
     'the same rate literal must mean the same price in both layers',
   );
 });

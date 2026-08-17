@@ -48,10 +48,10 @@ describe('paddle: settlement is quantity-only', () => {
     });
 
     const body = fixture.callsTo('POST', '/transactions')[0]?.body as Record<string, unknown>;
-    assert.deepEqual(body['items'], [{ price_id: 'pri_TEST_TOKENS', quantity: 1000 }]);
-    assert.equal(body['customer_id'], 'ctm_TEST1');
-    assert.deepEqual(body['custom_data'], { billing_kit_settlement: 'settle:subject-1:2026-07' });
-    assert.deepEqual(body['billing_period'], {
+    assert.deepEqual(body.items, [{ price_id: 'pri_TEST_TOKENS', quantity: 1000 }]);
+    assert.equal(body.customer_id, 'ctm_TEST1');
+    assert.deepEqual(body.custom_data, { billing_kit_settlement: 'settle:subject-1:2026-07' });
+    assert.deepEqual(body.billing_period, {
       starts_at: '2026-07-01T00:00:00.000Z',
       ends_at: '2026-08-01T00:00:00.000Z',
     });
@@ -213,8 +213,8 @@ describe('paddle: refunds are requests', () => {
     });
     assert.equal(ack.status, 'pending');
     const body = fixture.callsTo('POST', '/adjustments')[0]?.body as Record<string, unknown>;
-    assert.equal(body['type'], 'full');
-    assert.equal(body['action'], 'refund');
+    assert.equal(body.type, 'full');
+    assert.equal(body.action, 'refund');
   });
 
   it('allocates a partial refund to the single line it can', async () => {
@@ -231,7 +231,7 @@ describe('paddle: refunds are requests', () => {
     });
     assert.equal(ack.status, 'settled');
     const body = fixture.callsTo('POST', '/adjustments')[0]?.body as Record<string, unknown>;
-    assert.deepEqual(body['items'], [{ item_id: 'txnitm_TEST1', type: 'partial', amount: '500' }]);
+    assert.deepEqual(body.items, [{ item_id: 'txnitm_TEST1', type: 'partial', amount: '500' }]);
   });
 
   it('refuses a partial refund it would have to invent an allocation for', async () => {
@@ -278,7 +278,7 @@ describe('paddle: recovery without a searchable key', () => {
     });
     assert.equal(found?.ref, 'txn_TEST1');
     const call = fixture.callsTo('GET', '/transactions')[0];
-    assert.equal(call?.query['customer_id'], 'ctm_TEST1');
+    assert.equal(call?.query.customer_id, 'ctm_TEST1');
     assert.equal(call?.query['created_at[GTE]'], '2026-07-01T00:00:00.000Z');
   });
 
@@ -381,7 +381,7 @@ describe('paddle: subscriptions', () => {
     );
     assert.equal(result.status, 'canceled');
     const body = fixture.callsTo('POST', '/subscriptions/:id/cancel')[0]?.body as Record<string, unknown>;
-    assert.equal(body['effective_from'], 'next_billing_period');
+    assert.equal(body.effective_from, 'next_billing_period');
   });
 
   it('resolves our metric from the price custom_data', async () => {

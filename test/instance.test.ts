@@ -65,7 +65,7 @@ describe('createBilling — without a database', () => {
     const billing = createBilling({
       db,
       clock: () => {
-        const t = ticks[Math.min(i, ticks.length - 1)]!;
+        const t = ticks[Math.min(i, ticks.length - 1)];
         i += 1;
         seen.push(t);
         return t;
@@ -80,7 +80,7 @@ describe('createBilling — without a database', () => {
 
     await assert.rejects(() => billing.record(anEvent({ occurredAt: ticks[0] })));
     assert.equal(seen.length, 2, 'second call should read the clock again');
-    assert.notEqual(seen[0]!.getTime(), seen[1]!.getTime(), 'a captured clock would repeat');
+    assert.notEqual(seen[0].getTime(), seen[1].getTime(), 'a captured clock would repeat');
   });
 
   it('exposes the executor and clock it was built with', () => {

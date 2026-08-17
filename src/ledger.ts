@@ -165,7 +165,7 @@ function assertSameLegs(posting: LedgerPosting, existing: readonly LedgerEntry[]
   // insert assigns from the array index — so position is meaningful and two
   // legs cannot be matched to each other by accident.
   for (const [i, leg] of posting.legs.entries()) {
-    const was = existing[i]!;
+    const was = existing[i];
     if (was.subjectId !== leg.subjectId) {
       conflict(`leg ${i} was for subject ${was.subjectId}, this call sent ${leg.subjectId}`);
     }
@@ -376,7 +376,7 @@ export async function entries(db: SqlExecutor, q: EntriesQuery): Promise<LedgerE
     );
     for (const row of rows) all.push(toEntry(row));
     if (rows.length < ENTRIES_PAGE) return all;
-    const last: EntryRow = rows[rows.length - 1]!;
+    const last: EntryRow = rows[rows.length - 1];
     cursor = { postedAt: last.posted_at, txId: last.transaction_id, legNo: last.leg_no };
   }
 }
