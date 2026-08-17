@@ -92,12 +92,17 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm run test:unit && pnpm run test:adversarial",
-    "pretest:unit": "pnpm run build",
-    "test:unit": "tsx --test --test-concurrency=1 test/*.test.ts",
-    "test:adversarial": "tsx --test --test-concurrency=1 test/adversarial/*.test.ts",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "pnpm run build && pnpm run test:all",
+    "test:all": "tsx --test --test-concurrency=1 'test/*.test.ts' 'test/adversarial/*.test.ts' 'src/providers/tests/*.test.ts' 'src/metering/test/*.test.ts'",
+    "test:unit": "pnpm run build && tsx --test --test-concurrency=1 'test/*.test.ts'",
+    "test:adversarial": "tsx --test --test-concurrency=1 'test/adversarial/*.test.ts'",
+    "test:providers": "tsx --test --test-concurrency=1 'src/providers/tests/*.test.ts'",
+    "test:metering": "tsx --test --test-concurrency=1 'src/metering/test/*.test.ts'",
+    "test:coverage": "pnpm run build && c8 pnpm run test:all",
     "test:pack": "tsx --test scripts/verify-pack.ts",
-    "prepublishOnly": "pnpm run build && pnpm test && pnpm run typecheck && pnpm run test:pack"
+    "prepublishOnly": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm test && pnpm run test:pack"
   },
   "publishConfig": {
     "access": "restricted"
