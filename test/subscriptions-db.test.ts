@@ -216,4 +216,144 @@ describe('subscriptions persistence', { skip: harness === null ? SKIP_REASON : f
     assert.equal(report.charged, 0);
     assert.deepEqual(report.skipped, [orphan.id]);
   });
+
+  it('retries a failing charge with backoff, then reports it with the attempt count', async () => {
+    const back = new Date(NOW.getTime() - 40 * 86_400_000);
+    const sub = await createSubscription(
+      db,
+      { tenantId: 'sweep3', subjectId: 'r1', key: 'retry', plan: paid, seats: 1, startAt: back },
+      NOW,
+    );
+    const slept: number[] = [];
+    const sleep = async (ms: number): Promise<void> => {
+      slept.push(ms);
+    };
+
+    // Always fails: every attempt is used up, the item lands in errors, and
+    // because each attempt ran in its own transaction nothing was posted.
+    let calls = 0;
+    const failing = await chargeDueSubscriptions(db, {
+      tenantId: 'sweep3',
+      now: NOW,
+      plan: () => paid,
+      usageFor: () => {
+        calls += 1;
+        throw new Error('meter unavailable');
+      },
+      retry: { retries: 2, backoffMs: 10, sleep },
+    });
+    assert.equal(calls, 3, 'first try plus two retries');
+    assert.deepEqual(slept, [10, 20], 'exponential backoff between attempts');
+    assert.equal(failing.charged, 0);
+    assert.equal(failing.errors.length, 1);
+    assert.equal(failing.errors[0].subscriptionId, sub.id);
+    assert.equal(failing.errors[0].attempts, 3);
+    assert.match(failing.errors[0].message, /meter unavailable/);
+    const stillDue = await dueSubscriptions(db, { tenantId: 'sweep3', now: NOW });
+    assert.deepEqual(
+      stillDue.map((d) => d.id),
+      [sub.id],
+      'a failed item is left due for the next sweep, not advanced',
+    );
+    const bal = await balance(db, {
+      tenantId: 'sweep3',
+      subjectId: 'r1',
+      account: 'customer_balance',
+      currency: 'USD',
+    });
+    assert.equal(bal.minor, 0n, 'nothing posted for a charge that failed');
+
+    // Fails twice, then succeeds: the retry heals it within one sweep.
+    let flaky = 0;
+    const healed = await chargeDueSubscriptions(db, {
+      tenantId: 'sweep3',
+      now: NOW,
+      plan: () => paid,
+      usageFor: () => {
+        flaky += 1;
+        if (flaky < 3) throw new Error('transient');
+        return {};
+      },
+      retry: { retries: 2, backoffMs: 1, sleep },
+    });
+    assert.equal(healed.errors.length, 0);
+    assert.equal(healed.charged, 1);
+    assert.equal(healed.items[0].subscriptionId, sub.id);
+  });
+
+  it('holds a per-run lease: an overlapping sweep returns leased=false and does nothing', async () => {
+    const back = new Date(NOW.getTime() - 40 * 86_400_000);
+    await createSubscription(
+      db,
+      { tenantId: 'sweep4', subjectId: 'l1', key: 'lease', plan: paid, seats: 1, startAt: back },
+      NOW,
+    );
+    // Another worker holding the lease, on its own connection.
+    const other = new pg.Client({ connectionString: TEST_DATABASE_URL });
+    await other.connect();
+    try {
+      await other.query('BEGIN');
+      const held = await other.query<{ got: boolean }>(
+        'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS got',
+        ['billing-kit:sweep:sweep4'],
+      );
+      assert.equal(held.rows[0]?.got, true);
+
+      const blocked = await chargeDueSubscriptions(db, { tenantId: 'sweep4', now: NOW, plan: () => paid });
+      assert.equal(blocked.leased, false);
+      assert.equal(blocked.swept, 0);
+      assert.equal(blocked.charged, 0);
+
+      // A different lease key is a different lease.
+      const otherKey = await chargeDueSubscriptions(db, {
+        tenantId: 'sweep4',
+        now: NOW,
+        plan: () => paid,
+        lease: { key: 'someone-else' },
+      });
+      assert.equal(otherKey.leased, true);
+      assert.equal(otherKey.charged, 1);
+
+      await other.query('ROLLBACK');
+    } finally {
+      await other.end();
+    }
+
+    // Lease released: nothing left due, but the sweep itself now runs.
+    const after = await chargeDueSubscriptions(db, { tenantId: 'sweep4', now: NOW, plan: () => paid });
+    assert.equal(after.leased, true);
+    assert.equal(after.swept, 0);
+  });
+
+  it('skips a due row another worker holds FOR UPDATE, and reports it as locked', async () => {
+    const back = new Date(NOW.getTime() - 40 * 86_400_000);
+    const held = await createSubscription(
+      db,
+      { tenantId: 'sweep5', subjectId: 'h1', key: 'held', plan: paid, seats: 1, startAt: back },
+      NOW,
+    );
+    const free = await createSubscription(
+      db,
+      { tenantId: 'sweep5', subjectId: 'h2', key: 'free', plan: paid, seats: 1, startAt: back },
+      NOW,
+    );
+    const other = new pg.Client({ connectionString: TEST_DATABASE_URL });
+    await other.connect();
+    try {
+      await other.query('BEGIN');
+      await other.query('SELECT id FROM billing.subscriptions WHERE id = $1 FOR UPDATE', [held.id]);
+
+      const report = await chargeDueSubscriptions(db, { tenantId: 'sweep5', now: NOW, plan: () => paid, lease: false });
+      assert.equal(report.swept, 2);
+      assert.deepEqual(report.locked, [held.id]);
+      assert.deepEqual(
+        report.items.map((i) => i.subscriptionId),
+        [free.id],
+      );
+      assert.equal(report.errors.length, 0, 'a held row is not an error');
+      await other.query('ROLLBACK');
+    } finally {
+      await other.end();
+    }
+  });
 });
