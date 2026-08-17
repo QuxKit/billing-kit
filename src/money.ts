@@ -763,6 +763,72 @@ function roundProduct(productUnits: bigint, currency: string): PricedAmount {
   };
 }
 
+// --- package pricing --------------------------------------------------------
+
+/**
+ * A per-package price: `pricePerPackage` buys `unitsPerPackage` units, and a
+ * partial package rounds up to a whole one when `roundUp` is true (the way SMS
+ * blocks, token bundles and seat packs are actually sold) or is charged
+ * fractionally when it is false.
+ */
+export interface PackagePrice {
+  /** Units one package covers. A positive Quantity. */
+  unitsPerPackage: Quantity;
+  /** What one package costs. */
+  pricePerPackage: Money;
+  /**
+   * `true`: 1,001 units at 1,000/package is two packages. `false`: it is
+   * 1.001 packages, priced exactly and rounded once like everything else.
+   */
+  roundUp: boolean;
+}
+
+/**
+ * Price a quantity per package.
+ *
+ * With `roundUp` the package count is an integer, so the amount is
+ * `ceil(quantity / unitsPerPackage) * pricePerPackage` computed in integer
+ * arithmetic — exact, `residueMinor` 0. Without it the fractional package
+ * count is priced through the same single rounding site as `price`, so the
+ * pre-rounding value stays auditable. Negative quantities are refused; zero
+ * is zero packages, not one — a customer who used nothing owes nothing.
+ */
+export function pricePackage(quantity: Quantity, pkg: PackagePrice): PricedAmount {
+  const currency = pkg.pricePerPackage.currency;
+  if (pkg.unitsPerPackage.isZero() || pkg.unitsPerPackage.isNegative()) {
+    throw new BillingError({ code: 'invalid_tiers', reason: 'unitsPerPackage must be positive' });
+  }
+  if (pkg.pricePerPackage.isNegative()) {
+    throw new BillingError({ code: 'invalid_tiers', reason: 'pricePerPackage must not be negative' });
+  }
+  if (quantity.isNegative()) {
+    throw new BillingError({ code: 'invalid_tiers', reason: 'quantity is negative' });
+  }
+
+  if (pkg.roundUp) {
+    // ceil(q / per) over the scaled integers: both are scale-12, so the ratio
+    // of their units is the ratio of the values.
+    const per = pkg.unitsPerPackage.units;
+    const packages = (quantity.units + per - 1n) / per;
+    const minor = pkg.pricePerPackage.minor * packages;
+    return {
+      amount: Money.fromMinor(minor, currency),
+      exactMinor: renderScaled(minor * PRODUCT_UNIT, PRODUCT_SCALE),
+      residueMinor: renderScaled(0n, PRODUCT_SCALE),
+    };
+  }
+
+  // Fractional packages: (quantity / per) * price, exact until the one
+  // rounding. Both quantities are scale-12, so their ratio is the ratio of
+  // their units, and the product in 10^24 scale is
+  // q.units * price.minor * 10^24 / per.units. The division here is exact-ish
+  // bookkeeping (half-even at 10^-24 of a minor unit); the money rounding
+  // happens once, in roundProduct, like every other price.
+  const numerator = quantity.units * pkg.pricePerPackage.minor * PRODUCT_UNIT;
+  const productUnits = divideHalfEven(numerator, pkg.unitsPerPackage.units);
+  return roundProduct(productUnits, currency);
+}
+
 // --- tiered pricing ---------------------------------------------------------
 
 /**

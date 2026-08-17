@@ -7,6 +7,11 @@ All notable changes to `@quxkit/billing-kit` are recorded here. The format is
 ## [Unreleased]
 
 ### Added
+- `pricePackage(quantity, { unitsPerPackage, pricePerPackage, roundUp })` in
+  the core: per-package pricing (SMS per 500, tokens per 1,000). `roundUp`
+  bills whole packages in integer arithmetic (zero residue); without it,
+  fractional packages round once half-to-even like every price. Accepted as a
+  plan overage strategy: `price: { kind: 'package', package }`.
 - `changePlan(db, { tenantId, subscriptionId, from, to, behaviour, at?, seats?,
   usage? })` (`sql/032_plan_changes.sql`): `immediate` closes the current
   period at `at` on the old plan (prorated fees + usage, one balanced posting,

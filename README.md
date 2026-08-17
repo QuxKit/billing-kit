@@ -89,6 +89,7 @@ system*. Everything below is how it earns the word "correct."
 | Metering engine | `billing-kit/metering` | ✅ implemented, tested |
 | Usage aggregation — sum / count / max / unique | `billing-kit` | ✅ implemented, tested |
 | Tiered pricing — volume / graduated | `billing-kit` | ✅ implemented, tested |
+| Package pricing — per-N units, round-up | `billing-kit` | ✅ implemented, tested |
 | Subscriptions — plans, seats, overage, proration, trials | `billing-kit/subscriptions` | ✅ implemented, tested |
 | Coupons / discounts | `billing-kit/subscriptions` | ✅ implemented, tested |
 | Credit notes, prepaid wallets | `billing-kit` | ✅ implemented, tested |
@@ -201,6 +202,27 @@ residue with no row explaining the gap.
 Wire format everywhere is `{ "amount": "1999", "currency": "USD" }` — a string,
 in minor units. A decimal string would re-raise the question of how many places
 the currency has, which the currency tag already answers.
+
+### Package pricing
+
+Providers sell SMS per 500 and tokens per 1,000, rounded up to whole packages —
+a grain a per-unit rate cannot express: $2.00 per 1,000 as a `0.002` rate bills
+1,001 units at $2.002 instead of $4.00. `pricePackage` beside `priceTiered`:
+
+```ts
+import { pricePackage, Quantity, Money } from '@quxkit/billing-kit';
+
+pricePackage(Quantity.fromBigInt(1001n), {
+  unitsPerPackage: Quantity.fromBigInt(1000n),
+  pricePerPackage: Money.fromDecimalString('2.00', 'USD'),
+  roundUp: true,
+}).amount;   // 4.00 — two whole packages, integer arithmetic, zero residue
+```
+
+`roundUp: false` prices fractional packages exactly and rounds once,
+half-to-even, like every other price. Zero usage is zero packages. Plans accept
+it as an overage strategy: `price: { kind: 'package', package: {...} }` in a
+`usage` component, applied after the included allowance.
 
 ## Quickstart
 

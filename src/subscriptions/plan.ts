@@ -2,7 +2,7 @@
 // plan needs. All pure: no database, no clock beyond the dates handed in.
 
 import { BillingError } from '../errors.ts';
-import { currencyExponent, Money, price, priceTiered, Quantity, scaleFraction } from '../money.ts';
+import { currencyExponent, Money, price, pricePackage, priceTiered, Quantity, scaleFraction } from '../money.ts';
 import { applyDiscount } from './discount.ts';
 import type { BillingInterval, ChargeLine, PeriodCharge, PeriodChargeInput, Plan } from './types.ts';
 
@@ -44,6 +44,20 @@ export function definePlan(input: Plan): Plan {
     if (seen.has(u.metric)) bad(`metric ${u.metric} appears twice`);
     seen.add(u.metric);
     if (u.included?.isNegative()) bad(`included allowance for ${u.metric} is negative`);
+    if (u.price.kind === 'package') {
+      const pkg = u.price.package;
+      if (pkg.unitsPerPackage.isZero() || pkg.unitsPerPackage.isNegative()) {
+        bad(`package price for ${u.metric} needs a positive unitsPerPackage`);
+      }
+      if (pkg.pricePerPackage.currency !== input.currency) {
+        throw new BillingError({
+          code: 'currency_mismatch',
+          left: input.currency,
+          right: pkg.pricePerPackage.currency,
+        });
+      }
+      if (pkg.pricePerPackage.isNegative()) bad(`package price for ${u.metric} is negative`);
+    }
   }
 
   if (input.trialDays !== undefined && (!Number.isInteger(input.trialDays) || input.trialDays < 0)) {
@@ -132,7 +146,9 @@ export function chargeForPeriod(plan: Plan, input: PeriodChargeInput = {}): Peri
     const priced =
       comp.price.kind === 'flat'
         ? price(billable, comp.price.rate, currency)
-        : priceTiered(billable, comp.price.tiers, comp.price.mode, currency);
+        : comp.price.kind === 'tiered'
+          ? priceTiered(billable, comp.price.tiers, comp.price.mode, currency)
+          : pricePackage(billable, comp.price.package);
     if (priced.amount.isZero()) continue;
 
     lines.push({

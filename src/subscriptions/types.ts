@@ -13,7 +13,7 @@
 // no database; persistence (`store.ts`, `settle.ts`) is the only part that
 // needs one.
 
-import type { Money, Quantity, Rate, Tier, TierMode } from '../money.ts';
+import type { Money, PackagePrice, Quantity, Rate, Tier, TierMode } from '../money.ts';
 import type { SubjectId, TenantId } from '../types.ts';
 import type { DiscountRule } from './discount.ts';
 
@@ -27,7 +27,12 @@ export type BillingInterval = 'day' | 'week' | 'month' | 'year';
  * `Tier`s — the same primitives as `priceTiered`, so a plan's overage rounds in
  * exactly the one place the rest of the library rounds.
  */
-export type UsagePrice = { kind: 'flat'; rate: Rate } | { kind: 'tiered'; mode: TierMode; tiers: readonly Tier[] };
+export type UsagePrice =
+  | { kind: 'flat'; rate: Rate }
+  | { kind: 'tiered'; mode: TierMode; tiers: readonly Tier[] }
+  /** Per-package: `package.pricePerPackage` buys `unitsPerPackage`, partial
+   *  packages rounding up when `roundUp` — SMS blocks, token bundles. */
+  | { kind: 'package'; package: PackagePrice };
 
 export interface PlanUsage {
   /** The metric this prices — matches a metering `metric` (`tokens.input`). */
