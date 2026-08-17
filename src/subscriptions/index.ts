@@ -21,7 +21,7 @@ export type { Subscriptions, SubscriptionsOptions } from './instance.ts';
 export { createSubscriptions } from './instance.ts';
 export { addInterval, chargeForPeriod, daysInPeriod, definePlan } from './plan.ts';
 export type { ChargePeriodInput, ChargePeriodResult } from './settle.ts';
-export { chargeSubscriptionPeriod } from './settle.ts';
+export { chargeLinesJSON, chargeSubscriptionPeriod } from './settle.ts';
 export type { CreateSubscriptionInput, SubscriptionRef } from './store.ts';
 export { cancelSubscription, createSubscription, getSubscription } from './store.ts';
 export type { DueQuery, SweepError, SweepItem, SweepOptions, SweepReport, SweepRetry } from './sweep.ts';

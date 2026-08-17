@@ -94,6 +94,7 @@ system*. Everything below is how it earns the word "correct."
 | Credit notes, prepaid wallets | `billing-kit` | ✅ implemented, tested |
 | Provider adapters — Stripe, Paddle | `billing-kit/providers` | ✅ implemented, tested |
 | Webhook → ledger (`applyVerifiedEvent`, replay guard) | `billing-kit/providers` | ✅ implemented, tested |
+| Invoices — numbering, state machine, JSON/HTML render | `billing-kit/invoices` | ✅ implemented, tested (no PDF) |
 
 Metering, subscriptions and providers are **separate entry points**, not
 re-exports from the root, so an application using one does not compile the
@@ -509,6 +510,62 @@ it is posted, a credit note and a wallet are postings in their own right.
   body), `walletRedeemPosting` draws it down against a charge, and `walletBalance`
   reports what is left, positive. Prepaid money is money you may owe back, so it
   is never counted as revenue.
+
+## Invoices
+
+`@quxkit/billing-kit/invoices` (`sql/031_invoices.sql`) is the document a
+charged period becomes: numbered, stateful, with lines that sum to a total and a
+link back to the period and the ledger posting that produced it.
+
+```
+ draft ---finalize---> open ---markPaid---> paid
+   |                    |
+   |                    +---void---> void
+   +---void---> void    +---markUncollectible---> uncollectible
+```
+
+```ts
+import { invoiceForPeriod, finalize, attachSettlement, renderInvoice } from '@quxkit/billing-kit/invoices';
+
+// After chargeSubscriptionPeriod: the lines come from the breakdown it
+// persisted (base, seats, overage per meter, discount), never recomputed.
+const draft = await invoiceForPeriod(db, {
+  tenantId: 'acme',
+  subscriptionPeriodId: periodId,
+  credit: Money.fromDecimalString('20.00', 'USD'),   // optional: becomes a negative `credit` line
+}, new Date());
+
+const open = await finalize(db, { tenantId: 'acme', invoiceId: draft.id, prefix: 'INV' }, new Date());
+open.number;   // 'INV-2026-000042'  — gap-free per (tenant, prefix, year)
+
+// Send it to the provider, then remember which settlement it became. That is
+// what lets applyVerifiedEvent find it: a payment.succeeded whose settlementRef
+// matches moves it open -> paid in the same transaction as the cash posting.
+const settled = await stripe.settle({ ... });
+await attachSettlement(db, { tenantId: 'acme', invoiceId: open.id, provider: stripe.name, providerRef: settled.ref }, new Date());
+
+renderInvoice(open, { format: 'json' });                     // wire object, decimal strings
+renderInvoice(open, { format: 'html', issuer: { name: 'QuxKit' } });   // self-contained, print-styled
+```
+
+- **Numbering** is `{prefix}-{YYYY}-{seq:06}` from an `invoice_counters` row
+  locked `FOR UPDATE` and incremented in the same transaction that writes the
+  number, so concurrent finalizes queue and a rolled-back one leaves no hole.
+  Eight at once come out `000001..000008`; that is a test, not a claim.
+- **The state machine has one refusal**, `invoice_state` (`{ invoiceId, state,
+  operation, wanted }`). Every transition is a guarded `UPDATE ... WHERE state IN
+  (...)`, so two callers cannot both win. Lines can be added to a draft only;
+  `void` from draft (no number was taken) or open (the number stays, visibly
+  void); `uncollectible` from open.
+- **One invoice per period.** `invoiceForPeriod` is idempotent on the period,
+  including under a race. `createInvoice`/`addLine` are the raw path for an
+  invoice that is not a period.
+- **No PDF.** `renderInvoice` gives JSON or an HTML document that prints. A PDF
+  renderer is a native dependency or a headless browser; bring your own.
+- **`chargeSubscriptionPeriod` now accepts `discount`** and persists the charge
+  breakdown to `subscription_periods.charge_lines`; a period charged before
+  `031` was applied has none, and `invoiceForPeriod` refuses it rather than
+  inventing lines from the total.
 
 ## Database
 

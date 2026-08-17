@@ -71,6 +71,7 @@ export default defineConfig([
       'src/providers/index.ts',
       'src/metering/index.ts',
       'src/subscriptions/index.ts',
+      'src/invoices/index.ts',
       'src/pg.ts',
     ],
     format: ['esm', 'cjs'],

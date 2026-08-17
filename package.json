@@ -64,6 +64,14 @@
       "import": "./dist/subscriptions/index.mjs",
       "require": "./dist/subscriptions/index.cjs"
     },
+    "./invoices": {
+      "types": {
+        "import": "./dist/invoices/index.d.ts",
+        "require": "./dist/invoices/index.d.cts"
+      },
+      "import": "./dist/invoices/index.mjs",
+      "require": "./dist/invoices/index.cjs"
+    },
     "./pg": {
       "types": {
         "import": "./dist/pg.d.ts",

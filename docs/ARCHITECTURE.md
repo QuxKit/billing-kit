@@ -571,7 +571,25 @@ by `occurredAt` from the provider, and a transition backwards is recorded and
 ignored. A `settlement.voided` arriving before the `settlement.finalized` it
 voids must not resurrect the settlement.
 
-### 4.7 What replay actually means
+### 4.7 Invoices
+
+`billing.invoices` / `invoice_lines` (`sql/031_invoices.sql`) are the document a
+charged period becomes. The ledger is the record and the period is the schedule;
+the invoice is the numbered, stateful thing a customer sees and an auditor
+follows. It is built from `subscription_periods.charge_lines` — the breakdown
+`chargeSubscriptionPeriod` persisted — and never recomputed, so it says what the
+accrual says.
+
+Numbering is gap-free per (tenant, prefix, year): `invoice_counters` is locked
+`FOR UPDATE` and incremented in the same transaction that writes the number, so
+a rollback releases the number with it. The state machine is
+`draft → open → paid | void (+ uncollectible)`, every transition a guarded
+`UPDATE ... WHERE state IN (...)`, and its one refusal is `invoice_state`.
+`attachSettlement` records the provider settlement ref; `applyVerifiedEvent`
+resolves the subject from it when no resolver answers and moves the invoice to
+`paid` in the same transaction as the cash posting.
+
+### 4.8 What replay actually means
 
 Given `usage_events` and `price_versions`, the contents of `usage_aggregates`
 and `charges` for any **open** window are a pure function. You may delete and

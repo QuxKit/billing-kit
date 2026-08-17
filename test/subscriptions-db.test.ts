@@ -24,7 +24,7 @@ const q = (n: bigint) => Quantity.fromBigInt(n);
 const NOW = new Date();
 
 // Its own setup, because the shared harness rebuilds only 001_core.sql and the
-// subscription tables live in 020_subscriptions.sql.
+// subscription tables live in 020_subscriptions.sql (+ 031's charge_lines column).
 async function setup(): Promise<{ db: SqlExecutor; close(): Promise<void> } | null> {
   const pool = new pg.Pool({ connectionString: TEST_DATABASE_URL, max: 4 });
   try {
@@ -39,6 +39,8 @@ async function setup(): Promise<{ db: SqlExecutor; close(): Promise<void> } | nu
   await pool.query(await ddl('001_core.sql'));
   await pool.query('SELECT billing.ensure_core_partitions(2, $1)', [NOW]);
   await pool.query(await ddl('020_subscriptions.sql'));
+  // 031 adds subscription_periods.charge_lines, which chargeSubscriptionPeriod writes.
+  await pool.query(await ddl('031_invoices.sql'));
   return { db: fromPool(pool), close: () => pool.end() };
 }
 

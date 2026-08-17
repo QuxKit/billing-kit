@@ -32,6 +32,7 @@ psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/012_meter_batch.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/013_runs.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/020_subscriptions.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/030_provider_events.sql
+psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/031_invoices.sql
 psql -d "$DATABASE" -c 'SELECT billing.ensure_partitions()'
 ```
 
@@ -54,6 +55,7 @@ schema, and none of this is in the schema.
 | `012_meter_batch.sql` | `round_half_even()` and `meter_batch()` — the engine. |
 | `013_runs.sql` | `claim_meter_run()`, `heartbeat_meter_run()`, `settle_meter_run()` — the drain lease. |
 | `020_subscriptions.sql` | `subscriptions` and `subscription_periods` — the recurring-plan half (`billing-kit/subscriptions`). Not partitioned: bounded by customers, not traffic. Needs `001_core` only; the sweep posts each period's charge into its ledger. |
+| `031_invoices.sql` | `invoices`, `invoice_lines`, `invoice_counters` (`billing-kit/invoices`), plus `subscription_periods.charge_lines` — the persisted charge breakdown an invoice is built from. Needs `001_core` and `020_subscriptions`. |
 | `030_provider_events.sql` | `provider_events` — the webhook replay guard, keyed `(provider, provider_event_id)`. `applyVerifiedEvent` claims a row here and posts into `001_core`'s ledger in the same transaction. Needs `001_core` only. |
 
 **Order matters.** `011` must run before the first charge: `010` declares

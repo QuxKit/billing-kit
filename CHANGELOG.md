@@ -7,6 +7,19 @@ All notable changes to `@quxkit/billing-kit` are recorded here. The format is
 ## [Unreleased]
 
 ### Added
+- `@quxkit/billing-kit/invoices` (`sql/031_invoices.sql`): `invoices`,
+  `invoice_lines`, `invoice_counters`; `createInvoice`/`addLine`/`finalize`/
+  `markPaid`/`voidInvoice`/`markUncollectible`/`attachSettlement`/`getInvoice`/
+  `listInvoices`, `createInvoices` binding; gap-free `{prefix}-{YYYY}-{seq:06}`
+  numbering from a counter row locked `FOR UPDATE`; `draft → open → paid | void
+  (+ uncollectible)` with the typed `invoice_state` refusal (and
+  `invalid_invoice`); `invoiceForPeriod` builds lines from the persisted charge
+  breakdown (base, seats, overage per meter, discount, optional credit);
+  `renderInvoice(inv, { format: 'json' | 'html' })` — no PDF.
+  `applyVerifiedEvent` now falls back to the invoice a settlement ref is
+  attached to for the subject, and moves that invoice open → paid.
+- `chargeSubscriptionPeriod` accepts `discount` and persists `charge_lines`
+  (needs `sql/031`); `chargeLinesJSON` exported.
 - `applyVerifiedEvent(db, { provider, event, resolve })` in
   `@quxkit/billing-kit/providers`: posts the ledger transaction a
   `VerifiedEvent` means (`payment.succeeded` → payment, `refund.settled` →

@@ -16,9 +16,10 @@ import { BillingError } from '../errors.ts';
 import { accrualPosting, post } from '../ledger.ts';
 import type { Quantity } from '../money.ts';
 import type { PostedTransaction, SqlExecutor } from '../types.ts';
+import type { DiscountRule } from './discount.ts';
 import { addInterval, chargeForPeriod } from './plan.ts';
 import { type SubscriptionRow, toSubscription } from './store.ts';
-import type { PeriodCharge, Plan, Subscription, SubscriptionState } from './types.ts';
+import type { ChargeLine, PeriodCharge, Plan, Subscription, SubscriptionState } from './types.ts';
 
 export interface ChargePeriodInput {
   /** The plan the subscription references. Its currency and id must match. */
@@ -27,8 +28,29 @@ export interface ChargePeriodInput {
   subscription: Subscription;
   /** Metered usage for the period, by metric. Missing metrics count as zero. */
   usage?: Readonly<Record<string, Quantity>>;
+  /** A discount for this period — `discountForPeriod(coupon, index)`. */
+  discount?: DiscountRule;
   /** Charge timestamp; defaults to the injected clock / now. */
   now?: Date;
+}
+
+/**
+ * The persisted form of a charge's lines — `subscription_periods.charge_lines`
+ * (sql/031). Money as its wire form, quantities as decimal strings, so the
+ * invoice built later says exactly what was billed. Exported for the invoices
+ * module and for tests.
+ */
+export function chargeLinesJSON(lines: readonly ChargeLine[]): string {
+  return JSON.stringify(
+    lines.map((l) => ({
+      kind: l.kind,
+      description: l.description,
+      amount: l.amount.toJSON(),
+      ...(l.metric === undefined ? {} : { metric: l.metric }),
+      ...(l.quantity === undefined ? {} : { quantity: l.quantity.toDecimalString() }),
+      ...(l.residueMinor === undefined ? {} : { residueMinor: l.residueMinor }),
+    })),
+  );
 }
 
 export interface ChargePeriodResult {
@@ -74,7 +96,7 @@ export async function chargeSubscriptionPeriod(db: SqlExecutor, input: ChargePer
   const end = sub.currentPeriodEnd;
   const trial = sub.trialEnd !== null && start < sub.trialEnd;
 
-  const charge = chargeForPeriod(plan, { seats: sub.seats, usage: input.usage, trial });
+  const charge = chargeForPeriod(plan, { seats: sub.seats, usage: input.usage, trial, discount: input.discount });
   const chargeId = `sub:${sub.id}:${start.toISOString()}`;
 
   // 1. Post to the ledger — but only if there is something to post. A zero
@@ -109,8 +131,8 @@ export async function chargeSubscriptionPeriod(db: SqlExecutor, input: ChargePer
     await tx.query(
       `INSERT INTO billing.subscription_periods
          (id, subscription_id, tenant_id, subject_id, period_start, period_end,
-          charge_id, amount_minor, currency, charged_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          charge_id, amount_minor, currency, charged_at, charge_lines)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)
        ON CONFLICT (subscription_id, period_start) DO NOTHING`,
       [
         randomUUID(),
@@ -123,6 +145,7 @@ export async function chargeSubscriptionPeriod(db: SqlExecutor, input: ChargePer
         charge.total.minor.toString(),
         charge.currency,
         now,
+        chargeLinesJSON(charge.lines),
       ],
     );
 
