@@ -8,7 +8,7 @@ partition key, BRIN indexes, and the batch function itself (ARCHITECTURE.md
 `npx billing-kit migrate` applies a directory of these in order, once each,
 tracked in `billing.schema_migrations` and checksummed so an already-applied
 file that was edited is refused rather than skipped. Point it at the whole of
-`sql/` — all six apply in one run.
+`sql/` — every file applies in one run.
 
 They did not, until recently. `001_core.sql` and `010_metering.sql` each
 declared `billing.ledger_entries`, in shapes that could not both be right, and
@@ -31,6 +31,7 @@ psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/011_partitions.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/012_meter_batch.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/013_runs.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/020_subscriptions.sql
+psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/030_provider_events.sql
 psql -d "$DATABASE" -c 'SELECT billing.ensure_partitions()'
 ```
 
@@ -53,6 +54,7 @@ schema, and none of this is in the schema.
 | `012_meter_batch.sql` | `round_half_even()` and `meter_batch()` — the engine. |
 | `013_runs.sql` | `claim_meter_run()`, `heartbeat_meter_run()`, `settle_meter_run()` — the drain lease. |
 | `020_subscriptions.sql` | `subscriptions` and `subscription_periods` — the recurring-plan half (`billing-kit/subscriptions`). Not partitioned: bounded by customers, not traffic. Needs `001_core` only; the sweep posts each period's charge into its ledger. |
+| `030_provider_events.sql` | `provider_events` — the webhook replay guard, keyed `(provider, provider_event_id)`. `applyVerifiedEvent` claims a row here and posts into `001_core`'s ledger in the same transaction. Needs `001_core` only. |
 
 **Order matters.** `011` must run before the first charge: `010` declares
 `charges` and `ledger_entries` as partitioned with no partitions, and an insert

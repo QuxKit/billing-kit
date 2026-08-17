@@ -15,6 +15,14 @@
 //     the idempotency the interface guarantees.
 
 export {
+  type AppliedEvent,
+  type ApplySkipReason,
+  type ApplyVerifiedEventInput,
+  applyVerifiedEvent,
+  type ResolvedSubject,
+  type SubjectResolver,
+} from './apply';
+export {
   assertSettlementMode,
   canCreateSubscriptions,
   canFindCustomer,

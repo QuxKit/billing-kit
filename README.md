@@ -93,6 +93,7 @@ system*. Everything below is how it earns the word "correct."
 | Coupons / discounts | `billing-kit/subscriptions` | ✅ implemented, tested |
 | Credit notes, prepaid wallets | `billing-kit` | ✅ implemented, tested |
 | Provider adapters — Stripe, Paddle | `billing-kit/providers` | ✅ implemented, tested |
+| Webhook → ledger (`applyVerifiedEvent`, replay guard) | `billing-kit/providers` | ✅ implemented, tested |
 
 Metering, subscriptions and providers are **separate entry points**, not
 re-exports from the root, so an application using one does not compile the
@@ -371,6 +372,56 @@ with a merchant-of-record provider, the provider's number is authoritative and
 ours was an estimate. The difference posts to `settlement_variance`, where a
 non-zero balance is an alert. It is never absorbed into revenue.
 
+### From a webhook to the ledger
+
+`verifyWebhook` proves the bytes came from the provider and normalises them into
+a `VerifiedEvent`. `applyVerifiedEvent` is the other half: it records the event
+in `billing.provider_events` (`sql/030_provider_events.sql`), keyed by
+`(provider, providerEventId)`, and posts what it means — in one transaction.
+
+```ts
+import { createStripeProvider, applyVerifiedEvent } from '@quxkit/billing-kit/providers';
+
+const stripe = createStripeProvider({ apiKey, webhookSecret });
+
+// In the webhook route. Raw bytes in; nothing parsed before verification.
+const event = await stripe.verifyWebhook({ body: rawBody, headers: req.headers });
+
+const outcome = await applyVerifiedEvent(db, {
+  provider: stripe.name,
+  event,
+  // Whose settlement is this? Only the application knows: it called `settle`
+  // and stored the providerRef. Return null for one you do not recognise.
+  resolve: async (e) =>
+    'settlementRef' in e ? await lookupSubjectBySettlement(e.settlementRef) : null,
+});
+// { applied: true,  deduplicated: false, sourceKind: 'payment', transactionId, ... }
+// { applied: false, deduplicated: false, reason: 'payment_failed' }
+// { applied: true,  deduplicated: true,  ... }   <- a redelivery; nothing written
+```
+
+```
+ VerifiedEvent kind        posting                       result
+ ------------------------  ----------------------------  ------------------------------
+ payment.succeeded         paymentPosting  (cash in)     applied: true,  sourceKind 'payment'
+ refund.settled            refundPosting   (cash out)    applied: true,  sourceKind 'refund'
+ payment.failed            none                          applied: false, reason 'payment_failed'
+ refund.declined           none                          applied: false, reason 'refund_declined'
+ settlement.finalized      none (informational)          applied: false, reason 'no_posting'
+ settlement.voided         none (informational)          applied: false, reason 'no_posting'
+ subscription.changed      none (informational)          applied: false, reason 'no_posting'
+ unknown                   none                          applied: false, reason 'unmodelled'
+ (resolver returned null)  none                          applied: false, reason 'unresolved_subject'
+```
+
+Every event is recorded, posting or not, so a replay of any of them is answered
+from the row and never re-evaluated. The posting's `sourceId` is keyed by the
+provider's *settlement* ref (`stripe:in_123`), not by the event id: Stripe sends
+both `invoice.paid` and `invoice.payment_succeeded` for one invoice, and keyed
+by event that would post the cash twice. Two *different* amounts for one
+settlement are refused with `idempotency_conflict` and the event is not recorded,
+so the corrected redelivery starts clean.
+
 ## Subscriptions
 
 Recurring plans, priced on our side of the settle line. A plan is defined in
@@ -492,7 +543,7 @@ all. Nothing fails and nothing warns; you find out at a hundred million rows.
 
 ## CLI
 
-Applying the SQL by hand means finding five files and running them in the right
+Applying the SQL by hand means finding every file and running them in the right
 order, again after every upgrade. `npx billing-kit` does it and records what it
 did.
 
@@ -541,7 +592,7 @@ Three things worth knowing:
   installs no driver; the CLI needs one to open a socket, loads it dynamically,
   and tells you what to install if it is absent.
 
-All five shipped files apply in one run. `001_core.sql` and `010_metering.sql`
+All shipped files apply in one run. `001_core.sql` and `010_metering.sql`
 used to declare `billing.ledger_entries` in two incompatible shapes, and `010`
 raised rather than let the second definition be silently ignored, so `migrate`
 over the shipped set halted after the first file. `001_core`'s shape won — it is

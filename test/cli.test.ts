@@ -492,7 +492,7 @@ describe('billing-kit status', () => {
 describe('billing-kit migrate against the shipped sql/', () => {
   const guard = () => (admin ? false : SKIP_REASON);
 
-  it('applies all five shipped files, in order, in one command', async (t) => {
+  it('applies every shipped file, in order, in one command', async (t) => {
     if (guard()) return t.skip(SKIP_REASON);
     await resetDatabase();
 
@@ -509,7 +509,7 @@ describe('billing-kit migrate against the shipped sql/', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /applying {5}001_core\.sql … ok/);
     assert.match(r.stdout, /applying {5}010_metering\.sql … ok/);
-    assert.match(r.stdout, /6 applied\./);
+    assert.match(r.stdout, /7 applied\./);
 
     await inTestDb(async (c) => {
       const rows = (await c.query('SELECT filename FROM billing.schema_migrations ORDER BY filename')).rows;
@@ -522,6 +522,7 @@ describe('billing-kit migrate against the shipped sql/', () => {
           '012_meter_batch.sql',
           '013_runs.sql',
           '020_subscriptions.sql',
+          '030_provider_events.sql',
         ],
       );
 
@@ -550,7 +551,7 @@ describe('billing-kit migrate against the shipped sql/', () => {
 
     const s = cli(['status', '--database-url', TEST_URL, '--migrations', path.join(REPO, 'sql')]);
     assert.equal(s.status, 0);
-    assert.match(s.stdout, /6 applied, 0 pending/);
+    assert.match(s.stdout, /7 applied, 0 pending/);
   });
 
   it('refuses the metering group without 001_core rather than half-working', async (t) => {
