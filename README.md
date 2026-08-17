@@ -1,6 +1,10 @@
 # @quxkit/billing-kit
 
+<img src="https://raw.githubusercontent.com/QuxKit/quxkit-brand/main/billing-kit/sizes/billing-kit-128.png" width="76" align="right" alt="">
+
 **QuxKit** · blue stone · usage-based billing
+
+![status](https://img.shields.io/badge/status-shipped-2ea043) ![licence](https://img.shields.io/badge/licence-Apache--2.0-4f83f6) ![npm](https://img.shields.io/badge/npm-%40quxkit%2Fbilling--kit-cb3837)
 
 Usage-based billing as a library, over a provider you choose.
 
