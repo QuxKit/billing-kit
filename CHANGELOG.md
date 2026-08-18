@@ -6,6 +6,8 @@ All notable changes to `@quxkit/billing-kit` are recorded here. The format is
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-17
+
 ### Added
 - `sql/090_rls.sql` (optional): enables + **forces** row-level security on
   every `billing.*` table with a `tenant_id` column, policy
