@@ -26,6 +26,7 @@
 // resolver is a parameter, and an event it cannot resolve is recorded and
 // skipped — never posted against a guess.
 
+import { invoiceBySettlement, markPaidBySettlement } from '../invoices/store';
 import { paymentPosting, post, refundPosting } from '../ledger';
 import type { LedgerPosting, PostedTransaction, SqlExecutor, SubjectId, TenantId } from '../types';
 import type { VerifiedEvent } from './types';
@@ -46,7 +47,12 @@ export interface ApplyVerifiedEventInput {
   /** The adapter's `name`. Namespaces `providerEventId` in the replay guard. */
   provider: string;
   event: VerifiedEvent;
-  resolve: SubjectResolver;
+  /**
+   * Whose event this is. Optional: when the settlement ref is attached to an
+   * invoice (`attachSettlement`), the invoice answers. The resolver is asked
+   * first when given; the invoice is the fallback.
+   */
+  resolve?: SubjectResolver;
   /** Received-at, for the record. Defaults to now. Postings use the event's own
    *  `occurredAt`, never this. */
   now?: Date;
@@ -86,6 +92,9 @@ export type AppliedEvent = AppliedBase &
         transactionId: string;
         tenantId: TenantId;
         subjectId: SubjectId;
+        /** The open invoice this payment moved to `paid`, when the settlement
+         *  ref was attached to one. Null otherwise, and on replay. */
+        invoiceId: string | null;
       }
     | { applied: false; reason: ApplySkipReason }
   );
@@ -182,7 +191,7 @@ export async function applyVerifiedEvent(db: SqlExecutor, input: ApplyVerifiedEv
   // Resolve before the claim so the row records who this was for. The resolver
   // is a read; calling it on a replay costs a lookup and changes nothing.
   const needsSubject = event.kind === 'payment.succeeded' || event.kind === 'refund.settled';
-  const subject = needsSubject ? await input.resolve(event) : null;
+  const subject = needsSubject ? await resolveSubject(db, input) : null;
   const decided = plan(input, subject);
 
   return db.transaction(async (tx) => {
@@ -222,6 +231,7 @@ export async function applyVerifiedEvent(db: SqlExecutor, input: ApplyVerifiedEv
           transactionId: row.transaction_id,
           tenantId: row.tenant_id,
           subjectId: row.subject_id,
+          invoiceId: null,
         };
       }
       return { ...base, deduplicated: true, applied: false, reason: (row.reason ?? 'no_posting') as ApplySkipReason };
@@ -238,6 +248,14 @@ export async function applyVerifiedEvent(db: SqlExecutor, input: ApplyVerifiedEv
       [provider, event.providerEventId, posted.transactionId, decided.post.sourceId],
     );
 
+    // The invoice, if the settlement was attached to one: open → paid, in the
+    // same transaction as the cash posting, guarded on state so a late webhook
+    // for a voided invoice changes nothing.
+    const invoiceId =
+      event.kind === 'payment.succeeded'
+        ? await markPaidBySettlement(tx, { provider, providerRef: event.settlementRef, paidAt: event.occurredAt }, now)
+        : null;
+
     return {
       ...base,
       deduplicated: false,
@@ -247,6 +265,21 @@ export async function applyVerifiedEvent(db: SqlExecutor, input: ApplyVerifiedEv
       transactionId: posted.transactionId,
       tenantId: decided.subject.tenantId,
       subjectId: decided.subject.subjectId,
+      invoiceId,
     };
   });
+}
+
+/** The resolver first, then the invoice the settlement ref is attached to. */
+async function resolveSubject(db: SqlExecutor, input: ApplyVerifiedEventInput): Promise<ResolvedSubject | null> {
+  const { event, provider } = input;
+  if (input.resolve) {
+    const answer = await input.resolve(event);
+    if (answer !== null) return answer;
+  }
+  const settlementRef =
+    event.kind === 'payment.succeeded' || event.kind === 'refund.settled' ? event.settlementRef : null;
+  if (settlementRef === null) return null;
+  const invoice = await invoiceBySettlement(db, { provider, providerRef: settlementRef });
+  return invoice === null ? null : { tenantId: invoice.tenantId, subjectId: invoice.subjectId };
 }

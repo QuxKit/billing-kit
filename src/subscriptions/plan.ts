@@ -2,7 +2,7 @@
 // plan needs. All pure: no database, no clock beyond the dates handed in.
 
 import { BillingError } from '../errors.ts';
-import { currencyExponent, Money, price, priceTiered, Quantity, scaleFraction } from '../money.ts';
+import { currencyExponent, Money, price, pricePackage, priceTiered, Quantity, scaleFraction } from '../money.ts';
 import { applyDiscount } from './discount.ts';
 import type { BillingInterval, ChargeLine, PeriodCharge, PeriodChargeInput, Plan } from './types.ts';
 
@@ -44,15 +44,46 @@ export function definePlan(input: Plan): Plan {
     if (seen.has(u.metric)) bad(`metric ${u.metric} appears twice`);
     seen.add(u.metric);
     if (u.included?.isNegative()) bad(`included allowance for ${u.metric} is negative`);
+    if (u.price.kind === 'package') {
+      const pkg = u.price.package;
+      if (pkg.unitsPerPackage.isZero() || pkg.unitsPerPackage.isNegative()) {
+        bad(`package price for ${u.metric} needs a positive unitsPerPackage`);
+      }
+      if (pkg.pricePerPackage.currency !== input.currency) {
+        throw new BillingError({
+          code: 'currency_mismatch',
+          left: input.currency,
+          right: pkg.pricePerPackage.currency,
+        });
+      }
+      if (pkg.pricePerPackage.isNegative()) bad(`package price for ${u.metric} is negative`);
+    }
   }
 
   if (input.trialDays !== undefined && (!Number.isInteger(input.trialDays) || input.trialDays < 0)) {
     bad('trialDays must be a non-negative integer');
   }
 
+  for (const [key, feature] of Object.entries(input.features ?? {})) {
+    if (!key) bad('a feature has an empty key');
+    if (feature === true) continue;
+    if (!feature.meter) bad(`feature ${key} has an empty meter`);
+    if (feature.limit.isNegative()) bad(`feature ${key} has a negative limit`);
+    if (feature.method !== undefined && !['sum', 'count', 'max'].includes(feature.method)) {
+      bad(`feature ${key} has unknown method ${feature.method}`);
+    }
+    if (feature.overage !== undefined && !['deny', 'postpaid', 'wallet'].includes(feature.overage)) {
+      bad(`feature ${key} has unknown overage ${feature.overage}`);
+    }
+    if (feature.overage === 'postpaid' && !seen.has(feature.meter)) {
+      bad(`feature ${key} allows postpaid overage but the plan does not price ${feature.meter}`);
+    }
+  }
+
   return Object.freeze({
     ...input,
     usage: Object.freeze([...input.usage]),
+    ...(input.features === undefined ? {} : { features: Object.freeze({ ...input.features }) }),
   });
 }
 
@@ -83,20 +114,26 @@ export function chargeForPeriod(plan: Plan, input: PeriodChargeInput = {}): Peri
   const prorate = (m: Money): Money =>
     pro && pro.activeDays < pro.periodDays ? scaleFraction(m, BigInt(pro.activeDays), BigInt(pro.periodDays)) : m;
 
+  // Zero-day prorations (a period closed the day it began) produce no line:
+  // a base fee of 0.00 is not a fee, and an invoice should not show one.
   if (!trial && !plan.flat.isZero()) {
-    lines.push({ kind: 'flat', description: `${plan.id} base`, amount: prorate(plan.flat) });
+    const amount = prorate(plan.flat);
+    if (!amount.isZero()) lines.push({ kind: 'flat', description: `${plan.id} base`, amount });
   }
 
   if (!trial && plan.seats) {
     const count = Math.max(input.seats ?? 0, plan.seats.min ?? 0);
     if (count > 0) {
       const gross = plan.seats.unit.timesInteger(BigInt(count));
-      lines.push({
-        kind: 'seats',
-        description: `${count} seat${count === 1 ? '' : 's'}`,
-        amount: prorate(gross),
-        quantity: Quantity.fromBigInt(BigInt(count)),
-      });
+      const amount = prorate(gross);
+      if (!amount.isZero()) {
+        lines.push({
+          kind: 'seats',
+          description: `${count} seat${count === 1 ? '' : 's'}`,
+          amount,
+          quantity: Quantity.fromBigInt(BigInt(count)),
+        });
+      }
     }
   }
 
@@ -109,7 +146,9 @@ export function chargeForPeriod(plan: Plan, input: PeriodChargeInput = {}): Peri
     const priced =
       comp.price.kind === 'flat'
         ? price(billable, comp.price.rate, currency)
-        : priceTiered(billable, comp.price.tiers, comp.price.mode, currency);
+        : comp.price.kind === 'tiered'
+          ? priceTiered(billable, comp.price.tiers, comp.price.mode, currency)
+          : pricePackage(billable, comp.price.package);
     if (priced.amount.isZero()) continue;
 
     lines.push({

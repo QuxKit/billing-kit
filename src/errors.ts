@@ -46,6 +46,13 @@ export type BillingFailure =
   // --- ledger --------------------------------------------------------------
   | { code: 'unbalanced_transaction'; currency: string; residualMinor: string }
 
+  // --- invoices ------------------------------------------------------------
+  /** The invoice is not in a state the operation accepts. `state` is where it
+   *  is; `wanted` is what the operation needed. A `draft → open → paid | void`
+   *  machine, and this is its only refusal. */
+  | { code: 'invoice_state'; invoiceId: string; state: string; operation: string; wanted: readonly string[] }
+  | { code: 'invalid_invoice'; reason: string }
+
   // --- general -------------------------------------------------------------
   | { code: 'not_found'; what: string; id: string }
   | { code: 'provider_error'; provider: string; operation: string; detail: string };
@@ -89,6 +96,10 @@ function describe(failure: BillingFailure): string {
       return `invalid window: ${failure.reason}`;
     case 'unbalanced_transaction':
       return `ledger transaction does not sum to zero in ${failure.currency}: residual ${failure.residualMinor}`;
+    case 'invoice_state':
+      return `invoice ${failure.invoiceId} is ${failure.state}; ${failure.operation} needs ${failure.wanted.join(' or ')}`;
+    case 'invalid_invoice':
+      return `invalid invoice: ${failure.reason}`;
     case 'not_found':
       return `no ${failure.what} with id ${failure.id}`;
     case 'provider_error':

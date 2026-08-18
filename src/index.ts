@@ -51,7 +51,7 @@ export {
   walletRedeemPosting,
   walletTopupPosting,
 } from './ledger';
-export type { MoneyJSON, PricedAmount, Tier, TierMode } from './money';
+export type { MoneyJSON, PackagePrice, PricedAmount, Tier, TierMode } from './money';
 export {
   allocate,
   currencyExponent,
@@ -60,6 +60,7 @@ export {
   knownCurrencies,
   Money,
   price,
+  pricePackage,
   priceTiered,
   Quantity,
   Rate,

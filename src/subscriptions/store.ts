@@ -15,6 +15,7 @@ export interface SubscriptionRow {
   subject_id: string;
   key: string;
   plan_id: string;
+  pending_plan_id: string | null;
   currency: string;
   state: SubscriptionState;
   seats: number;
@@ -33,6 +34,7 @@ export function toSubscription(row: SubscriptionRow): Subscription {
     subjectId: row.subject_id,
     key: row.key,
     planId: row.plan_id,
+    pendingPlanId: row.pending_plan_id ?? null,
     currency: row.currency.trim(),
     state: row.state,
     seats: Number(row.seats),
@@ -45,10 +47,12 @@ export function toSubscription(row: SubscriptionRow): Subscription {
   };
 }
 
-const SELECT = `SELECT id, tenant_id, subject_id, key, plan_id, currency, state, seats,
+/** Every column `toSubscription` reads. One list, imported by settle/sweep. */
+export const SUBSCRIPTION_COLUMNS = `id, tenant_id, subject_id, key, plan_id, pending_plan_id, currency, state, seats,
        current_period_start, current_period_end, trial_end, started_at,
-       canceled_at, cancel_at_period_end
-  FROM billing.subscriptions`;
+       canceled_at, cancel_at_period_end`;
+
+const SELECT = `SELECT ${SUBSCRIPTION_COLUMNS} FROM billing.subscriptions`;
 
 export interface CreateSubscriptionInput {
   tenantId: TenantId;
@@ -96,9 +100,7 @@ export async function createSubscription(
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
      ON CONFLICT (tenant_id, key)
      DO UPDATE SET key = billing.subscriptions.key
-     RETURNING id, tenant_id, subject_id, key, plan_id, currency, state, seats,
-       current_period_start, current_period_end, trial_end, started_at,
-       canceled_at, cancel_at_period_end`,
+     RETURNING ${SUBSCRIPTION_COLUMNS}`,
     [
       randomUUID(),
       input.tenantId,
@@ -162,18 +164,14 @@ export async function cancelSubscription(
           `UPDATE billing.subscriptions
               SET state = 'canceled', canceled_at = $3, cancel_at_period_end = false
             WHERE tenant_id = $1 AND id = $2
-        RETURNING id, tenant_id, subject_id, key, plan_id, currency, state, seats,
-          current_period_start, current_period_end, trial_end, started_at,
-          canceled_at, cancel_at_period_end`,
+        RETURNING ${SUBSCRIPTION_COLUMNS}`,
           [ref.tenantId, ref.id, now],
         )
       : await db.query<SubscriptionRow>(
           `UPDATE billing.subscriptions
               SET cancel_at_period_end = true
             WHERE tenant_id = $1 AND id = $2 AND state <> 'canceled'
-        RETURNING id, tenant_id, subject_id, key, plan_id, currency, state, seats,
-          current_period_start, current_period_end, trial_end, started_at,
-          canceled_at, cancel_at_period_end`,
+        RETURNING ${SUBSCRIPTION_COLUMNS}`,
           [ref.tenantId, ref.id],
         );
 

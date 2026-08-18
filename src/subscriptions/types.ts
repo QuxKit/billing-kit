@@ -13,7 +13,7 @@
 // no database; persistence (`store.ts`, `settle.ts`) is the only part that
 // needs one.
 
-import type { Money, Quantity, Rate, Tier, TierMode } from '../money.ts';
+import type { Money, PackagePrice, Quantity, Rate, Tier, TierMode } from '../money.ts';
 import type { SubjectId, TenantId } from '../types.ts';
 import type { DiscountRule } from './discount.ts';
 
@@ -27,7 +27,12 @@ export type BillingInterval = 'day' | 'week' | 'month' | 'year';
  * `Tier`s — the same primitives as `priceTiered`, so a plan's overage rounds in
  * exactly the one place the rest of the library rounds.
  */
-export type UsagePrice = { kind: 'flat'; rate: Rate } | { kind: 'tiered'; mode: TierMode; tiers: readonly Tier[] };
+export type UsagePrice =
+  | { kind: 'flat'; rate: Rate }
+  | { kind: 'tiered'; mode: TierMode; tiers: readonly Tier[] }
+  /** Per-package: `package.pricePerPackage` buys `unitsPerPackage`, partial
+   *  packages rounding up when `roundUp` — SMS blocks, token bundles. */
+  | { kind: 'package'; package: PackagePrice };
 
 export interface PlanUsage {
   /** The metric this prices — matches a metering `metric` (`tokens.input`). */
@@ -36,6 +41,30 @@ export interface PlanUsage {
   included?: Quantity;
   price: UsagePrice;
 }
+
+/**
+ * What a plan entitles a subscriber to, beyond the usage it prices.
+ *
+ * `true` is a boolean gate: the plan has it or it does not (`sso`,
+ * `audit_log`). A metered feature is an allowance per period over a metric —
+ * `{ limit: 100, meter: 'exports' }` — checked against `aggregateUsage` for the
+ * current period. What happens past the limit is `overage`:
+ *
+ *   'deny'      refuse. The default when the plan does not price the meter.
+ *   'postpaid'  allow; the overage is priced by the plan's `usage` component
+ *               for the same metric. The default when it does.
+ *   'wallet'    allow while the subject's prepaid wallet holds a positive
+ *               balance; refuse when it is empty.
+ */
+export type PlanFeature =
+  | true
+  | {
+      limit: Quantity;
+      meter: string;
+      /** How the meter's events are collapsed. Default `sum`. */
+      method?: 'sum' | 'count' | 'max';
+      overage?: 'deny' | 'postpaid' | 'wallet';
+    };
 
 export interface PlanSeats {
   /** Price per seat per period. */
@@ -59,6 +88,8 @@ export interface Plan {
   flat: Money;
   seats?: PlanSeats;
   usage: readonly PlanUsage[];
+  /** Feature gates and per-period allowances. See `PlanFeature`. */
+  features?: Readonly<Record<string, PlanFeature>>;
   /** Free days at the start; the period a subscription begins in charges no
    *  base or seat fee. Usage in that period is still priced. Omit for none. */
   trialDays?: number;
@@ -117,6 +148,8 @@ export interface Subscription {
   /** The caller's idempotency key for creation. Unique per tenant. */
   key: string;
   planId: string;
+  /** A period-end plan change waiting for the next advance. */
+  pendingPlanId: string | null;
   currency: string;
   state: SubscriptionState;
   seats: number;

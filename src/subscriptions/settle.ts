@@ -16,9 +16,10 @@ import { BillingError } from '../errors.ts';
 import { accrualPosting, post } from '../ledger.ts';
 import type { Quantity } from '../money.ts';
 import type { PostedTransaction, SqlExecutor } from '../types.ts';
-import { addInterval, chargeForPeriod } from './plan.ts';
-import { type SubscriptionRow, toSubscription } from './store.ts';
-import type { PeriodCharge, Plan, Subscription, SubscriptionState } from './types.ts';
+import type { DiscountRule } from './discount.ts';
+import { addInterval, chargeForPeriod, daysInPeriod } from './plan.ts';
+import { SUBSCRIPTION_COLUMNS, type SubscriptionRow, toSubscription } from './store.ts';
+import type { ChargeLine, PeriodCharge, Plan, Subscription, SubscriptionState } from './types.ts';
 
 export interface ChargePeriodInput {
   /** The plan the subscription references. Its currency and id must match. */
@@ -27,8 +28,64 @@ export interface ChargePeriodInput {
   subscription: Subscription;
   /** Metered usage for the period, by metric. Missing metrics count as zero. */
   usage?: Readonly<Record<string, Quantity>>;
+  /** A discount for this period — `discountForPeriod(coupon, index)`. */
+  discount?: DiscountRule;
   /** Charge timestamp; defaults to the injected clock / now. */
   now?: Date;
+  /**
+   * Close the period at this instant instead of at `currentPeriodEnd`: the
+   * period charged is `[start, closeAt)`, fees prorated by its days, and the
+   * subscription advances to `[closeAt, currentPeriodEnd)` rather than to the
+   * next period. What `changePlan` uses to bill the old plan for the days it
+   * was active. Must fall inside the current period.
+   */
+  closeAt?: Date;
+  /** With `closeAt`: the plan the remainder of the period continues on. */
+  nextPlanId?: string;
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * The fee proration for a period `[start, end)` of a plan on `interval`.
+ *
+ * A full period — `start` is one interval before `end` — has none. A shorter
+ * one is the tail of a period that was closed early (a plan change), and its
+ * fees are `activeDays / periodDays` of the full period. Whole days, floored
+ * from the front: the head `[fullStart, start)` and the tail `[start, end)`
+ * then sum to exactly `periodDays`, so the two halves of a split period never
+ * bill a day twice or drop one.
+ */
+export function prorationFor(
+  start: Date,
+  end: Date,
+  interval: Plan['interval'],
+): { activeDays: number; periodDays: number } | undefined {
+  const fullStart = addInterval(end, interval, -1);
+  if (start.getTime() <= fullStart.getTime()) return undefined;
+  const periodDays = daysInPeriod(fullStart, end);
+  const elapsed = Math.floor((start.getTime() - fullStart.getTime()) / DAY_MS);
+  const activeDays = Math.max(0, periodDays - elapsed);
+  return activeDays >= periodDays ? undefined : { activeDays, periodDays };
+}
+
+/**
+ * The persisted form of a charge's lines — `subscription_periods.charge_lines`
+ * (sql/031). Money as its wire form, quantities as decimal strings, so the
+ * invoice built later says exactly what was billed. Exported for the invoices
+ * module and for tests.
+ */
+export function chargeLinesJSON(lines: readonly ChargeLine[]): string {
+  return JSON.stringify(
+    lines.map((l) => ({
+      kind: l.kind,
+      description: l.description,
+      amount: l.amount.toJSON(),
+      ...(l.metric === undefined ? {} : { metric: l.metric }),
+      ...(l.quantity === undefined ? {} : { quantity: l.quantity.toDecimalString() }),
+      ...(l.residueMinor === undefined ? {} : { residueMinor: l.residueMinor }),
+    })),
+  );
 }
 
 export interface ChargePeriodResult {
@@ -71,10 +128,35 @@ export async function chargeSubscriptionPeriod(db: SqlExecutor, input: ChargePer
   }
 
   const start = sub.currentPeriodStart;
-  const end = sub.currentPeriodEnd;
+  const fullEnd = sub.currentPeriodEnd;
+  const closeAt = input.closeAt;
+  if (closeAt !== undefined && (closeAt.getTime() < start.getTime() || closeAt.getTime() > fullEnd.getTime())) {
+    throw new BillingError({ code: 'invalid_subscription', reason: 'closeAt must fall inside the current period' });
+  }
+  const end = closeAt ?? fullEnd;
   const trial = sub.trialEnd !== null && start < sub.trialEnd;
 
-  const charge = chargeForPeriod(plan, { seats: sub.seats, usage: input.usage, trial });
+  // Fees prorate when the period is not a whole interval: the tail of a period
+  // closed early by a plan change, or the head being closed now. Whole days,
+  // floored from the front, so head + tail = the full period exactly.
+  const proration =
+    closeAt === undefined
+      ? prorationFor(start, end, plan.interval)
+      : (() => {
+          const fullStart = addInterval(fullEnd, plan.interval, -1);
+          const periodDays = daysInPeriod(fullStart, fullEnd);
+          const head = Math.floor((start.getTime() - fullStart.getTime()) / DAY_MS);
+          const activeDays = Math.max(0, Math.floor((end.getTime() - fullStart.getTime()) / DAY_MS) - head);
+          return activeDays >= periodDays ? undefined : { activeDays, periodDays };
+        })();
+
+  const charge = chargeForPeriod(plan, {
+    seats: sub.seats,
+    usage: input.usage,
+    trial,
+    discount: input.discount,
+    proration,
+  });
   const chargeId = `sub:${sub.id}:${start.toISOString()}`;
 
   // 1. Post to the ledger — but only if there is something to post. A zero
@@ -97,20 +179,24 @@ export async function chargeSubscriptionPeriod(db: SqlExecutor, input: ChargePer
   // 2. + 3. Record the period and advance, in one transaction. The advance is
   //    guarded on the period it is moving off, so a replay after the advance has
   //    already happened updates nothing and we read the current row instead.
+  // Closing early: the remainder of this period, on the next plan. Otherwise
+  // the next whole period, applying a pending plan change if one waited.
   const nextStart = end;
-  const nextEnd = addInterval(end, plan.interval);
-  const nextState: SubscriptionState = sub.cancelAtPeriodEnd
-    ? 'canceled'
-    : sub.trialEnd !== null && sub.trialEnd <= nextStart
-      ? 'active'
-      : sub.state;
+  const nextEnd = closeAt === undefined ? addInterval(end, plan.interval) : fullEnd;
+  const nextPlanId = closeAt === undefined ? (sub.pendingPlanId ?? sub.planId) : (input.nextPlanId ?? sub.planId);
+  const nextState: SubscriptionState =
+    closeAt === undefined && sub.cancelAtPeriodEnd
+      ? 'canceled'
+      : sub.trialEnd !== null && sub.trialEnd <= nextStart
+        ? 'active'
+        : sub.state;
 
   const advanced = await db.transaction(async (tx) => {
     await tx.query(
       `INSERT INTO billing.subscription_periods
          (id, subscription_id, tenant_id, subject_id, period_start, period_end,
-          charge_id, amount_minor, currency, charged_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          charge_id, amount_minor, currency, charged_at, charge_lines)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)
        ON CONFLICT (subscription_id, period_start) DO NOTHING`,
       [
         randomUUID(),
@@ -123,6 +209,7 @@ export async function chargeSubscriptionPeriod(db: SqlExecutor, input: ChargePer
         charge.total.minor.toString(),
         charge.currency,
         now,
+        chargeLinesJSON(charge.lines),
       ],
     );
 
@@ -131,22 +218,19 @@ export async function chargeSubscriptionPeriod(db: SqlExecutor, input: ChargePer
           SET current_period_start = $3,
               current_period_end   = $4,
               state                = $5,
-              canceled_at          = CASE WHEN $5 = 'canceled' THEN $6 ELSE canceled_at END
+              canceled_at          = CASE WHEN $5 = 'canceled' THEN $6 ELSE canceled_at END,
+              plan_id              = $8,
+              pending_plan_id      = CASE WHEN $9 THEN NULL ELSE pending_plan_id END
         WHERE tenant_id = $1 AND id = $2 AND current_period_start = $7
-    RETURNING id, tenant_id, subject_id, key, plan_id, currency, state, seats,
-      current_period_start, current_period_end, trial_end, started_at,
-      canceled_at, cancel_at_period_end`,
-      [sub.tenantId, sub.id, nextStart, nextEnd, nextState, now, start],
+    RETURNING ${SUBSCRIPTION_COLUMNS}`,
+      [sub.tenantId, sub.id, nextStart, nextEnd, nextState, now, start, nextPlanId, closeAt === undefined],
     );
 
     if (updated.length > 0) return { row: updated[0], deduplicated: false };
 
     // Already advanced by an earlier run — return the row as it now stands.
     const current = await tx.query<SubscriptionRow>(
-      `SELECT id, tenant_id, subject_id, key, plan_id, currency, state, seats,
-              current_period_start, current_period_end, trial_end, started_at,
-              canceled_at, cancel_at_period_end
-         FROM billing.subscriptions WHERE tenant_id = $1 AND id = $2`,
+      `SELECT ${SUBSCRIPTION_COLUMNS} FROM billing.subscriptions WHERE tenant_id = $1 AND id = $2`,
       [sub.tenantId, sub.id],
     );
     return { row: current[0], deduplicated: true };

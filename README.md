@@ -89,11 +89,16 @@ system*. Everything below is how it earns the word "correct."
 | Metering engine | `billing-kit/metering` | ✅ implemented, tested |
 | Usage aggregation — sum / count / max / unique | `billing-kit` | ✅ implemented, tested |
 | Tiered pricing — volume / graduated | `billing-kit` | ✅ implemented, tested |
+| Package pricing — per-N units, round-up | `billing-kit` | ✅ implemented, tested |
+| Row-level security (optional `sql/090_rls.sql`) | SQL | ✅ implemented, tested as non-superuser owner |
 | Subscriptions — plans, seats, overage, proration, trials | `billing-kit/subscriptions` | ✅ implemented, tested |
 | Coupons / discounts | `billing-kit/subscriptions` | ✅ implemented, tested |
 | Credit notes, prepaid wallets | `billing-kit` | ✅ implemented, tested |
 | Provider adapters — Stripe, Paddle | `billing-kit/providers` | ✅ implemented, tested |
 | Webhook → ledger (`applyVerifiedEvent`, replay guard) | `billing-kit/providers` | ✅ implemented, tested |
+| Invoices — numbering, state machine, JSON/HTML render | `billing-kit/invoices` | ✅ implemented, tested (no PDF) |
+| Entitlements — feature gates, metered allowances, overage rules | `billing-kit/entitlements` | ✅ implemented, tested |
+| Plan change with automatic proration | `billing-kit/subscriptions` | ✅ implemented, tested |
 
 Metering, subscriptions and providers are **separate entry points**, not
 re-exports from the root, so an application using one does not compile the
@@ -198,6 +203,27 @@ residue with no row explaining the gap.
 Wire format everywhere is `{ "amount": "1999", "currency": "USD" }` — a string,
 in minor units. A decimal string would re-raise the question of how many places
 the currency has, which the currency tag already answers.
+
+### Package pricing
+
+Providers sell SMS per 500 and tokens per 1,000, rounded up to whole packages —
+a grain a per-unit rate cannot express: $2.00 per 1,000 as a `0.002` rate bills
+1,001 units at $2.002 instead of $4.00. `pricePackage` beside `priceTiered`:
+
+```ts
+import { pricePackage, Quantity, Money } from '@quxkit/billing-kit';
+
+pricePackage(Quantity.fromBigInt(1001n), {
+  unitsPerPackage: Quantity.fromBigInt(1000n),
+  pricePerPackage: Money.fromDecimalString('2.00', 'USD'),
+  roundUp: true,
+}).amount;   // 4.00 — two whole packages, integer arithmetic, zero residue
+```
+
+`roundUp: false` prices fractional packages exactly and rounds once,
+half-to-even, like every other price. Zero usage is zero packages. Plans accept
+it as an overage strategy: `price: { kind: 'package', package: {...} }` in a
+`usage` component, applied after the included allowance.
 
 ## Quickstart
 
@@ -489,6 +515,81 @@ that fails is **retried with backoff** (`retry: { retries, backoffMs }`, default
 two retries from 100 ms) before it lands in `errors` with its `attempts` count —
 and its row stays due for the next fire.
 
+### Changing plan
+
+billing-kit charges in arrears, so a mid-period change never credits an
+already-paid period; it splits the period being lived. `changePlan` with
+`behaviour: 'immediate'` closes the current period at `at` on the old plan —
+fees prorated to `activeDays/periodDays`, usage so far priced at the old rates,
+one balanced accrual posting, one period row that `invoiceForPeriod` can
+invoice — and restarts the remainder on the new plan, which the sweep charges
+at period end prorated to its days. Whole days, floored from the front, so the
+two halves sum to exactly the period: no day billed twice, none dropped.
+
+```ts
+import { changePlan } from '@quxkit/billing-kit/subscriptions';
+
+await changePlan(db, {
+  tenantId: 'acme', subscriptionId,
+  from: basic, to: pro,
+  behaviour: 'immediate',            // or 'period_end'
+  at: new Date('2026-08-16'),        // 15 days on basic, 16 on pro (of 31)
+  usage: { requests: q(500n) },      // usage so far, billed now at basic's rates
+});
+// { subscription, closed: { charge, transaction, ... }, proration: { periodDays: 31, oldDays: 15, newDays: 16 } }
+```
+
+`behaviour: 'period_end'` sets `pending_plan_id`; the next advance applies it,
+so the customer keeps the plan they are in until the period ends. A same-day
+change (at the period start) switches with nothing to close. Changes are
+recorded in `billing.plan_changes` (`sql/032_plan_changes.sql`) and are
+idempotent on `(subscription, effectiveAt)` — the retry of an applied change is
+a no-op even after the period advanced. Cross-interval changes are refused;
+cancel and resubscribe.
+
+## Entitlements
+
+`@quxkit/billing-kit/entitlements` answers "may this subject do X right now?"
+from things that already exist — no entitlements table to keep in step. A plan
+declares `features`; `check` reads the active subscription, its plan, this
+period's usage (`aggregateUsage`) and, for wallet overage, the wallet.
+
+```ts
+const team = definePlan({
+  id: 'team', currency: 'USD', interval: 'month', flat: usd('49.00'),
+  usage: [{ metric: 'requests', price: { kind: 'flat', rate: Rate.fromDecimalString('0.1') } }],
+  features: {
+    sso: true,                                              // boolean gate
+    api: { limit: q(100_000n), meter: 'requests' },         // priced by the plan -> postpaid overage
+    exports: { limit: q(20n), meter: 'exports' },           // not priced -> deny past the limit
+    renders: { limit: q(5n), meter: 'renders', overage: 'wallet' },   // allowed while the wallet is positive
+    peak: { limit: q(50n), meter: 'concurrency', method: 'max' },
+  },
+});
+
+import { createEntitlements } from '@quxkit/billing-kit/entitlements';
+const entitlements = createEntitlements({ db, plan: (id) => catalogue[id] });
+
+await entitlements.check({ tenantId: 'acme', subjectId: 'ada', feature: 'exports' });
+// { feature: 'exports', allowed: true, kind: 'metered', limit, used, remaining, period, subscriptionId, planId }
+// { allowed: false, reason: 'limit_reached' | 'wallet_empty' | 'no_subscription' | 'not_in_plan' | 'unknown_plan' }
+// { allowed: true, overage: true }            <- past the limit, covered postpaid or by the wallet
+await entitlements.list({ tenantId: 'acme', subjectId: 'ada' });   // every feature of the plan
+```
+
+```
+ metered feature past its limit    overage        answer
+ --------------------------------  -------------  ---------------------------------
+ plan prices the meter             postpaid       allowed, overage: true  (default)
+ plan does not price the meter     deny           allowed: false, limit_reached  (default)
+ overage: 'wallet'                 wallet         allowed while walletBalance > 0, else wallet_empty
+```
+
+The period is the one that contains `at`: if the sweep is late and the
+subscription row has not advanced, the window is stepped forward by the plan
+interval so last period's usage never counts against this one. `definePlan`
+refuses `overage: 'postpaid'` on a meter the plan does not price.
+
 ## Discounts, credit notes and wallets
 
 Three modifiers that stay true to the ledger — a discount lowers a charge before
@@ -509,6 +610,62 @@ it is posted, a credit note and a wallet are postings in their own right.
   body), `walletRedeemPosting` draws it down against a charge, and `walletBalance`
   reports what is left, positive. Prepaid money is money you may owe back, so it
   is never counted as revenue.
+
+## Invoices
+
+`@quxkit/billing-kit/invoices` (`sql/031_invoices.sql`) is the document a
+charged period becomes: numbered, stateful, with lines that sum to a total and a
+link back to the period and the ledger posting that produced it.
+
+```
+ draft ---finalize---> open ---markPaid---> paid
+   |                    |
+   |                    +---void---> void
+   +---void---> void    +---markUncollectible---> uncollectible
+```
+
+```ts
+import { invoiceForPeriod, finalize, attachSettlement, renderInvoice } from '@quxkit/billing-kit/invoices';
+
+// After chargeSubscriptionPeriod: the lines come from the breakdown it
+// persisted (base, seats, overage per meter, discount), never recomputed.
+const draft = await invoiceForPeriod(db, {
+  tenantId: 'acme',
+  subscriptionPeriodId: periodId,
+  credit: Money.fromDecimalString('20.00', 'USD'),   // optional: becomes a negative `credit` line
+}, new Date());
+
+const open = await finalize(db, { tenantId: 'acme', invoiceId: draft.id, prefix: 'INV' }, new Date());
+open.number;   // 'INV-2026-000042'  — gap-free per (tenant, prefix, year)
+
+// Send it to the provider, then remember which settlement it became. That is
+// what lets applyVerifiedEvent find it: a payment.succeeded whose settlementRef
+// matches moves it open -> paid in the same transaction as the cash posting.
+const settled = await stripe.settle({ ... });
+await attachSettlement(db, { tenantId: 'acme', invoiceId: open.id, provider: stripe.name, providerRef: settled.ref }, new Date());
+
+renderInvoice(open, { format: 'json' });                     // wire object, decimal strings
+renderInvoice(open, { format: 'html', issuer: { name: 'QuxKit' } });   // self-contained, print-styled
+```
+
+- **Numbering** is `{prefix}-{YYYY}-{seq:06}` from an `invoice_counters` row
+  locked `FOR UPDATE` and incremented in the same transaction that writes the
+  number, so concurrent finalizes queue and a rolled-back one leaves no hole.
+  Eight at once come out `000001..000008`; that is a test, not a claim.
+- **The state machine has one refusal**, `invoice_state` (`{ invoiceId, state,
+  operation, wanted }`). Every transition is a guarded `UPDATE ... WHERE state IN
+  (...)`, so two callers cannot both win. Lines can be added to a draft only;
+  `void` from draft (no number was taken) or open (the number stays, visibly
+  void); `uncollectible` from open.
+- **One invoice per period.** `invoiceForPeriod` is idempotent on the period,
+  including under a race. `createInvoice`/`addLine` are the raw path for an
+  invoice that is not a period.
+- **No PDF.** `renderInvoice` gives JSON or an HTML document that prints. A PDF
+  renderer is a native dependency or a headless browser; bring your own.
+- **`chargeSubscriptionPeriod` now accepts `discount`** and persists the charge
+  breakdown to `subscription_periods.charge_lines`; a period charged before
+  `031` was applied has none, and `invoiceForPeriod` refuses it rather than
+  inventing lines from the total.
 
 ## Database
 
@@ -540,6 +697,44 @@ Two things in that file exist because Prisma cannot express them, and `db push`
 produces a plausible wrong answer for both — a partitioned parent's primary key
 must include the partition key, and `PARTITION BY` has no Prisma equivalent at
 all. Nothing fails and nothing warns; you find out at a hundred million rows.
+
+## Row-level security
+
+`sql/090_rls.sql` — **optional** — makes the database enforce the tenant
+boundary the queries already respect: it enables **and forces** RLS on every
+`billing.*` table with a `tenant_id` column, with one policy:
+
+```sql
+USING (tenant_id = current_setting('tenancy.tenant_id', true))
+```
+
+The tenant is declared per transaction, compatible with tenant-kit:
+
+```sql
+BEGIN;
+SET LOCAL tenancy.tenant_id = 'acme';
+-- every statement here sees (and can write) only acme's rows
+COMMIT;
+```
+
+- **Closed by default.** `current_setting(..., true)` is NULL when nothing was
+  declared, NULL equals nothing, so an undeclared connection reads zero rows
+  and cannot write any. The forgotten `WHERE tenant_id = ...` in a host's own
+  reporting SQL returns the declared tenant's rows, never everyone's.
+- **FORCE is the point.** Plain RLS exempts the table owner — usually exactly
+  the role the application connects as. With FORCE the owner is bound too;
+  only superusers and `BYPASSRLS` roles step around it, so do not run the
+  application as either. The test suite proves the property as a
+  non-superuser, non-BYPASSRLS role that owns the tables (`test/rls.test.ts`).
+- **Idempotent and re-runnable.** The file discovers tenant tables by column,
+  so run it again after any migration that adds one. It is numbered 090 to run
+  last; `npx billing-kit migrate` applies it with the rest.
+- Writes are checked too (`WITH CHECK`): posting a ledger transaction for a
+  tenant the transaction did not declare fails at the database.
+
+Cost: one `current_setting` comparison per row scan. Partitioned parents carry
+the policy; access through the parent (the only path the library uses) is
+covered.
 
 ## CLI
 
