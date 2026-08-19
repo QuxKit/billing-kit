@@ -97,6 +97,15 @@ including the negative ones. Sending only the positive lines over-taxes every
 invoice that carries a discount, and the invoice still adds up afterwards, so
 nothing catches it.
 
+**The quote is per line; the document is per rate.** A calculator returns one
+amount per (line, jurisdiction) — that is what vendors return and what a filing
+needs. `taxLinesFrom` then merges amounts sharing a jurisdiction, a rate and a
+treatment into one invoice line, with the source line numbers in metadata,
+because an invoice reading `VAT 20% (Pro) / VAT 20% (Seats) / VAT 20% (Overage)`
+is not one anybody wants to receive. Different rates stay apart even within one
+jurisdiction, and a reverse charge is never merged into a taxed line — the
+zero-amount row exists to carry a sentence, and merging would delete it.
+
 **Tax is outside the subtotal.** `Invoice.subtotal` is the taxable base;
 `Invoice.total` is every line. A subtotal that contained tax would be a figure
 nothing on the document adds up to, and would read as revenue against a number
