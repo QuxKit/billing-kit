@@ -220,6 +220,21 @@ export interface ProviderCapabilities {
   /** True when a refund is a request that may be declined (Paddle). The ledger
    *  posts on the webhook, never on the call's return. */
   refundsAreAsynchronous: boolean;
+  /**
+   * True when the provider retries a failed payment on its own schedule.
+   *
+   * The one capability that exists to stop us doing something rather than to
+   * let us. Stripe's Smart Retries and Paddle's recovery both charge the card
+   * again and both email the customer; a dunning policy that also retries
+   * charges twice and mails twice, and the customer reads that as our bug.
+   * `dunning/forProvider()` reads this and forces the policy to observe.
+   *
+   * Required rather than optional on purpose. The safe default would have to be
+   * `false`, and a provider adapter that forgot to say so would silently opt
+   * its users into double-dunning; a required field makes the omission a
+   * compile error in the adapter instead.
+   */
+  retriesPayments: boolean;
   /** Provider-side request idempotency, if any. Always an optimisation on top
    *  of our own record: every provider's retention window is finite and
    *  shorter than a bad weekend. */

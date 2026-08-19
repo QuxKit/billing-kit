@@ -185,14 +185,24 @@ function assertLine(line: NewInvoiceLine, currency: string): void {
   }
 }
 
-/** Sum the lines: subtotal is the positive ones, total is all of them. */
+/**
+ * Sum the lines: subtotal is the taxable base, total is everything.
+ *
+ * Three kinds are out of the subtotal and each for its own reason. `discount`
+ * and `credit` are negative, so including them would make "the positive lines"
+ * false. `tax` is positive and still excluded: a subtotal carrying it is a
+ * number that appears nowhere on the document, and one that overstates the
+ * revenue half of the invoice by exactly a liability.
+ */
+const OUTSIDE_SUBTOTAL: readonly InvoiceLineKind[] = ['discount', 'credit', 'tax'];
+
 function totals(lines: readonly { amount: Money; kind: InvoiceLineKind }[], currency: string) {
   const zero = Money.zero(currency);
   let subtotal = zero;
   let total = zero;
   for (const l of lines) {
     total = total.plus(l.amount);
-    if (l.kind !== 'discount' && l.kind !== 'credit') subtotal = subtotal.plus(l.amount);
+    if (!OUTSIDE_SUBTOTAL.includes(l.kind)) subtotal = subtotal.plus(l.amount);
   }
   return { subtotal, total };
 }

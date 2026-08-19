@@ -41,6 +41,7 @@ async function setup(): Promise<{ db: SqlExecutor; close(): Promise<void> } | nu
   await pool.query(await ddl('020_subscriptions.sql'));
   await pool.query(await ddl('031_invoices.sql'));
   await pool.query(await ddl('032_plan_changes.sql'));
+  await pool.query(await ddl('033_tax_lines.sql'));
   return { db: fromPool(pool), close: () => pool.end() };
 }
 

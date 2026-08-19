@@ -80,6 +80,22 @@
       "import": "./dist/invoices/index.mjs",
       "require": "./dist/invoices/index.cjs"
     },
+    "./tax": {
+      "types": {
+        "import": "./dist/tax/index.d.ts",
+        "require": "./dist/tax/index.d.cts"
+      },
+      "import": "./dist/tax/index.mjs",
+      "require": "./dist/tax/index.cjs"
+    },
+    "./dunning": {
+      "types": {
+        "import": "./dist/dunning/index.d.ts",
+        "require": "./dist/dunning/index.d.cts"
+      },
+      "import": "./dist/dunning/index.mjs",
+      "require": "./dist/dunning/index.cjs"
+    },
     "./pg": {
       "types": {
         "import": "./dist/pg.d.ts",

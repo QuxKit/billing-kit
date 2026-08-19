@@ -81,6 +81,7 @@ async function setup(): Promise<Harness | null> {
   await ddl('030_provider_events.sql');
   await ddl('031_invoices.sql');
   await ddl('032_plan_changes.sql');
+  await ddl('033_tax_lines.sql');
   await ddl('090_rls.sql');
   await ddl('090_rls.sql'); // idempotent
 

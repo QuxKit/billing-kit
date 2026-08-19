@@ -18,7 +18,7 @@
 // exponent, so USD arrives as `1.50` and JPY as `150`, and `decimals` here
 // defaults to that rather than to 2.
 
-import { currencyExponent, DECIMAL_SCALE, Money, Quantity, Rate } from './money';
+import { currencyExponent, DECIMAL_SCALE, type Money, type Quantity, type Rate } from './money';
 
 /** How a value should be shortened for a human. */
 export interface DisplayOptions {
