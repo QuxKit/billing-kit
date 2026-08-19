@@ -85,10 +85,19 @@ not owe, and a ledger that reconciles against a document you did not write.
 `assertQuoteCovers` runs on every quote, not only in an adapter's test suite,
 because what it catches is a vendor's response shape changing under an
 integration that passed its own tests yesterday. It rejects a tax amount in the
-wrong currency, an amount against a line that was never sent, a negative amount
-(a reversal is a credit note), and the same jurisdiction returned twice for one
-line. Two *different* jurisdictions on one line are fine — that is what a US
-sale is.
+wrong currency, an amount against a line that was never sent, and the same
+jurisdiction returned twice for one line. Two *different* jurisdictions on one
+line are fine — that is what a US sale is.
+
+The sign rule is in two parts, and the split matters. An amount may be negative
+**only if the line it taxes is negative** — that is how netting works when the
+quote is per line, since a discount's contribution to the tax really is
+negative. What must never go negative is the **jurisdiction's total across the
+invoice**, because that is the figure that reaches the document, and tax owed
+cannot be less than nothing. A single per-amount "never negative" rule cannot
+express that, and getting it wrong in either direction is silent: too strict and
+a discounted invoice cannot be quoted at all, too loose and a credit note goes
+out dressed as a sale.
 
 ## Two decisions worth knowing about
 
