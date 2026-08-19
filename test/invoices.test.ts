@@ -58,6 +58,7 @@ async function setup(): Promise<{ db: SqlExecutor; close(): Promise<void> } | nu
   await pool.query(await ddl('030_provider_events.sql'));
   await pool.query(await ddl('031_invoices.sql'));
   await pool.query(await ddl('032_plan_changes.sql'));
+  await pool.query(await ddl('033_tax_lines.sql'));
   await pool.query(await ddl('031_invoices.sql')); // idempotent
   return { db: fromPool(pool), close: () => pool.end() };
 }
@@ -107,6 +108,38 @@ describe('invoices', { skip: harness === null ? SKIP_REASON : false }, () => {
     assert.equal(more.subtotal.toDecimalString(), '79.00', 'subtotal is the positive lines');
     assert.equal(more.total.toDecimalString(), '71.10', 'total is every line');
     assert.equal(more.lines[1].quantity?.toDecimalString(), '3.000000000000');
+  });
+
+  it('keeps tax out of the subtotal and in the total', async () => {
+    const inv = await createInvoice(
+      db,
+      {
+        tenantId: 'acme',
+        subjectId: 'ada',
+        currency: 'USD',
+        lines: [
+          { kind: 'base', description: 'team base', amount: usd('100.00') },
+          { kind: 'discount', description: 'launch coupon', amount: usd('-10.00') },
+          { kind: 'tax', description: 'NY State Sales Tax 4%', amount: usd('3.60') },
+        ],
+      },
+      NOW,
+    );
+    // The tax was computed on 100 less the 10 discount. A subtotal carrying the
+    // 3.60 would be a figure nothing on the document adds up to, and would read
+    // to anyone reconciling as revenue we do not have.
+    assert.equal(inv.subtotal.toDecimalString(), '100.00', 'subtotal excludes tax and discounts');
+    assert.equal(inv.total.toDecimalString(), '93.60', 'total is every line, tax included');
+
+    const json = renderInvoice(inv, { format: 'json' });
+    assert.equal(json.tax, '3.60');
+
+    // Tax renders under the subtotal, not among the things that were sold, and
+    // keeps its own description so the jurisdiction survives onto the document.
+    const html = renderInvoice(inv, { format: 'html' });
+    const foot = html.slice(html.indexOf('<tfoot>'));
+    assert.match(foot, /NY State Sales Tax 4%/);
+    assert.doesNotMatch(html.slice(0, html.indexOf('<tfoot>')), /NY State Sales Tax/);
   });
 
   it('refuses a discount that is positive, a base that is negative, and a foreign currency', async () => {

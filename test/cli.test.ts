@@ -509,7 +509,7 @@ describe('billing-kit migrate against the shipped sql/', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /applying {5}001_core\.sql … ok/);
     assert.match(r.stdout, /applying {5}010_metering\.sql … ok/);
-    assert.match(r.stdout, /10 applied\./);
+    assert.match(r.stdout, /11 applied\./);
 
     await inTestDb(async (c) => {
       const rows = (await c.query('SELECT filename FROM billing.schema_migrations ORDER BY filename')).rows;
@@ -525,6 +525,7 @@ describe('billing-kit migrate against the shipped sql/', () => {
           '030_provider_events.sql',
           '031_invoices.sql',
           '032_plan_changes.sql',
+          '033_tax_lines.sql',
           '090_rls.sql',
         ],
       );
@@ -554,7 +555,7 @@ describe('billing-kit migrate against the shipped sql/', () => {
 
     const s = cli(['status', '--database-url', TEST_URL, '--migrations', path.join(REPO, 'sql')]);
     assert.equal(s.status, 0);
-    assert.match(s.stdout, /10 applied, 0 pending/);
+    assert.match(s.stdout, /11 applied, 0 pending/);
   });
 
   it('refuses the metering group without 001_core rather than half-working', async (t) => {

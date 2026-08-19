@@ -59,6 +59,10 @@ export const STRIPE_CAPABILITIES = {
   merchantOfRecord: false,
   capturesPayment: true,
   refundsAreAsynchronous: false,
+  // Smart Retries. On by default on every Stripe account, and it emails the
+  // customer as well as charging the card, so a policy of ours that also
+  // retried would do both twice.
+  retriesPayments: true,
   idempotency: { header: 'Idempotency-Key', retentionHours: 24 },
   createsSubscriptions: true,
   // Stripe indexes customer metadata in its search API and email in its list

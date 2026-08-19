@@ -6,7 +6,30 @@
 // or from a host's own renderer of choice; the JSON is the wire form for a
 // host that has one already.
 
+import { Money } from '../money.ts';
 import type { Invoice, InvoiceLine } from './types.ts';
+
+/**
+ * The tax lines, and everything else, kept apart.
+ *
+ * Both renderers want the same split and for the same reason: tax belongs
+ * under the subtotal on the document, not among the things that were sold. A
+ * reader scanning the line items should see what they bought; a reader
+ * checking the arithmetic should see base, then each jurisdiction, then total.
+ */
+function split(inv: Invoice): { items: InvoiceLine[]; taxes: InvoiceLine[]; tax: Money } {
+  const items: InvoiceLine[] = [];
+  const taxes: InvoiceLine[] = [];
+  for (const line of inv.lines) (line.kind === 'tax' ? taxes : items).push(line);
+  return {
+    items,
+    taxes,
+    tax: Money.sum(
+      taxes.map((l) => l.amount),
+      inv.currency,
+    ),
+  };
+}
 
 export interface RenderOptions {
   format: 'json' | 'html';
@@ -27,6 +50,8 @@ export interface InvoiceJSON {
   subjectId: string;
   currency: string;
   subtotal: string;
+  /** Sum of the tax lines. `"0.00"` when there are none, never absent. */
+  tax: string;
   total: string;
   period: { start: string; end: string } | null;
   issuedAt: string | null;
@@ -51,6 +76,7 @@ export function invoiceToJSON(inv: Invoice): InvoiceJSON {
     subjectId: inv.subjectId,
     currency: inv.currency,
     subtotal: inv.subtotal.toDecimalString(),
+    tax: split(inv).tax.toDecimalString(),
     total: inv.total.toDecimalString(),
     period: inv.period ? { start: inv.period.start.toISOString(), end: inv.period.end.toISOString() } : null,
     issuedAt: inv.issuedAt?.toISOString() ?? null,
@@ -95,13 +121,21 @@ export function invoiceToHTML(inv: Invoice, opts: RenderOptions): string {
         (party.email ? `<div>${esc(party.email)}</div>` : '') +
         '</div>'
       : '';
-  const rows = inv.lines
+  const { items, taxes } = split(inv);
+  const rows = items
     .map(
       (l) =>
         `<tr class="line ${l.kind}"><td>${esc(l.description)}</td>` +
         `<td class="num">${l.quantity ? esc(l.quantity.toDecimalString().replace(/\.?0+$/, '')) : ''}</td>` +
         `<td class="num">${fmt(l.amount)}</td></tr>`,
     )
+    .join('\n');
+  // One footer row per jurisdiction rather than a merged "Tax" line. A US sale
+  // is taxed by a state and a county at once, and an EU reverse charge is a
+  // zero-amount row whose whole purpose is the sentence it carries; merging
+  // either into a single figure loses what the document exists to state.
+  const taxRows = taxes
+    .map((l) => `<tr class="tax"><td>${esc(l.description)}</td><td></td><td class="num">${fmt(l.amount)}</td></tr>`)
     .join('\n');
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Invoice ${esc(title)}</title>
@@ -123,6 +157,7 @@ tfoot td{border:0;font-weight:600}@media print{body{margin:0}}
 ${rows}
 </tbody>
 <tfoot><tr><td>Subtotal</td><td></td><td class="num">${fmt(inv.subtotal)}</td></tr>
+${taxRows}
 <tr><td>Total</td><td></td><td class="num">${fmt(inv.total)}</td></tr></tfoot></table>
 </body></html>
 `;

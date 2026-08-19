@@ -33,6 +33,16 @@ export type {
   UsageQuery,
 } from './events';
 export { aggregateUsage, queryUsage, RECORD_MANY_MAX, record, recordMany, validateEvent } from './events';
+// Display formatting. Separate from the values on purpose — see src/format.ts.
+export type { DisplayOptions } from './format';
+export {
+  displayDefaults,
+  formatMoney,
+  formatQuantity,
+  formatRate,
+  resetDisplayDefaults,
+  setDisplayDefaults,
+} from './format';
 export type { Billing, BillingOptions } from './instance';
 export { createBilling } from './instance';
 export type { BalanceQuery, EntriesQuery } from './ledger';
@@ -52,17 +62,6 @@ export {
   walletTopupPosting,
 } from './ledger';
 export type { MoneyJSON, PackagePrice, PricedAmount, Tier, TierMode } from './money';
-
-// Display formatting. Separate from the values on purpose — see src/format.ts.
-export type { DisplayOptions } from './format';
-export {
-  displayDefaults,
-  formatMoney,
-  formatQuantity,
-  formatRate,
-  resetDisplayDefaults,
-  setDisplayDefaults,
-} from './format';
 export {
   allocate,
   currencyExponent,

@@ -115,3 +115,17 @@ export const settlementPostsCash = (capabilities: ProviderCapabilities): boolean
  * revenue overstates income and creates a liability we do not owe.
  */
 export const taxIsOurs = (capabilities: ProviderCapabilities): boolean => !capabilities.merchantOfRecord;
+
+/**
+ * Whether the provider is already chasing this failed payment.
+ *
+ * True means our dunning must not act: the provider is retrying the card and
+ * emailing the payer on its own schedule, and anything we add is a second
+ * charge and a second email against the same debt. `dunning/forProvider()`
+ * turns this into a policy the sweep can safely run.
+ *
+ * Both shipped adapters return true, which is the point. Provider-led recovery
+ * is the ordinary case, and a kit whose dunning assumed otherwise would be
+ * wrong for almost everyone who installed it.
+ */
+export const providerDuns = (capabilities: ProviderCapabilities): boolean => capabilities.retriesPayments;

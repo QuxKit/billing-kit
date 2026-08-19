@@ -38,6 +38,15 @@ refunds, webhook signature verification. Nothing else.
 accounting system, or a payment processor. It has interfaces where those attach
 and no opinions inside them.
 
+Two of those interfaces now exist rather than being merely promised.
+`billing-kit/tax` is where a `TaxCalculator` attaches — the shape of the
+question and the invoice line the answer becomes, with no rate, jurisdiction or
+filing calendar anywhere in it (docs/TAX.md). `billing-kit/dunning` is where a
+recovery policy attaches — a case, a ladder, and one pure function that says
+what is due, with no mailer, template, cron or default schedule
+(docs/DUNNING.md). Implementations of the first live in
+`@quxkit/billing-kit-adapters`; the second's persistence is not built yet.
+
 ---
 
 ## 2. The provider interface
@@ -120,6 +129,13 @@ export interface ProviderCapabilities {
   /** True when a refund is a request that may be declined (Paddle). The ledger
    *  posts on the webhook, never on the call's return. */
   refundsAreAsynchronous: boolean;
+  /** True when the provider retries a failed payment on its own schedule —
+   *  Stripe's Smart Retries, Paddle's recovery. The one capability that exists
+   *  to stop us doing something: a dunning policy that also retried would
+   *  charge the card twice and email the customer twice. Required, not
+   *  optional, because the safe default would have to be `false` and an adapter
+   *  that forgot would silently opt its users into double-dunning. */
+  retriesPayments: boolean;
   /** Provider-side request idempotency, if any. Always an optimisation on top
    *  of our own record, never a substitute — every provider's retention window
    *  is finite and shorter than a bad weekend. */
@@ -274,13 +290,16 @@ disabled webhook endpoint.
 
 **Stripe** — `lines` and `quantity`. `merchantOfRecord: false`,
 `capturesPayment: true`, `refundsAreAsynchronous: false`,
+`retriesPayments: true` (Smart Retries is on by default and emails the customer
+as well as charging the card),
 `idempotency: { header: 'Idempotency-Key', retentionHours: 24 }`.
 `settle` in `lines` mode creates invoice items then an invoice; in `quantity`
 mode reports against a metered price. `verifyWebhook` is HMAC-SHA256 over
 `` `${t}.${rawBody}` `` compared to `v1`, with a timestamp tolerance.
 
 **Paddle** — `quantity` only. `merchantOfRecord: true`, `capturesPayment: true`,
-`refundsAreAsynchronous: true`. `settle` pushes quantities to subscription
+`refundsAreAsynchronous: true`, `retriesPayments: true` — it is the merchant of
+record, so the relationship with the payer is theirs and so is the retry. `settle` pushes quantities to subscription
 items; `providerTotal` is null until Paddle prices the transaction, and arrives
 on `settlement.finalized`. `resolveItem` maps our metric to a Paddle price id.
 `verifyWebhook` is HMAC-SHA256 over `` `${ts}:${rawBody}` `` compared to `h1`.

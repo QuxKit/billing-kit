@@ -23,7 +23,7 @@ import type { SubjectId, TenantId } from '../types.ts';
  */
 export type InvoiceState = 'draft' | 'open' | 'paid' | 'void' | 'uncollectible';
 
-export type InvoiceLineKind = 'base' | 'seats' | 'overage' | 'discount' | 'credit' | 'custom';
+export type InvoiceLineKind = 'base' | 'seats' | 'overage' | 'tax' | 'discount' | 'credit' | 'custom';
 
 export interface InvoiceLine {
   id: string;
@@ -46,7 +46,12 @@ export interface Invoice {
   number: string | null;
   state: InvoiceState;
   currency: string;
-  /** Sum of the positive lines (base, seats, overage, custom). */
+  /**
+   * The taxable base: every positive line except tax. Discounts and credits are
+   * excluded because they are negative, and tax is excluded because a subtotal
+   * that contained it would be a figure nothing on the document adds up to —
+   * and would read, to anyone reconciling, as revenue we do not have.
+   */
   subtotal: Money;
   /** Sum of every line. What is owed. */
   total: Money;

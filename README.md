@@ -143,7 +143,9 @@ you must be able to answer for; the provider still captures the money.
 
 billing-kit is not a tax engine, a dunning system, a pricing UI, an accounting
 system, or a payment processor. It has interfaces where those attach and no
-opinions inside them.
+opinions inside them — `billing-kit/tax` for a tax calculator you supply
+(docs/TAX.md) and `billing-kit/dunning` for a recovery policy you write
+(docs/DUNNING.md). Neither ships a rate table, an email or a schedule.
 
 It is also not a tenancy system. Every ingest row carries a `tenantId`, and
 this library never verifies one — by design, it cannot. What billing-kit
