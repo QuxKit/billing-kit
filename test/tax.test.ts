@@ -140,7 +140,7 @@ describe('assertQuoteCovers', () => {
 });
 
 describe('taxLinesFrom', () => {
-  it('makes one line per jurisdiction, carrying rate and source line in metadata', () => {
+  it('makes one line per jurisdiction, carrying rate and source lines in metadata', () => {
     const state = NY_STATE;
     const county = { ...state, jurisdiction: 'US-NY-NEW-YORK', description: 'NYC Local 4.5%', amount: usd(450n) };
     const lines = taxLinesFrom(request(), quote({ amounts: [state, county] }));
@@ -151,9 +151,76 @@ describe('taxLinesFrom', () => {
     assert.deepEqual(lines[0]?.metadata, {
       jurisdiction: 'US-NY',
       rate: '0.040000000000',
-      taxedLineNo: '1',
+      taxedLineNos: ['1'],
       quoteRef: 'calc-1',
     });
+  });
+
+  it('merges one rate across many items into one line, because that is how an invoice reads', () => {
+    const three = request({
+      lines: [
+        { ref: '1', description: 'Pro plan', amount: usd(10_000n) },
+        { ref: '2', description: 'Seats', amount: usd(3_000n) },
+        { ref: '3', description: 'Overage', amount: usd(500n) },
+      ],
+    });
+    const perLine = quote({
+      amounts: [
+        { ...NY_STATE, ref: '1', amount: usd(400n) },
+        { ...NY_STATE, ref: '2', amount: usd(120n) },
+        { ...NY_STATE, ref: '3', amount: usd(20n) },
+      ],
+    });
+    const lines = taxLinesFrom(three, perLine);
+    assert.equal(lines.length, 1, 'three items at one rate is one tax line');
+    assert.equal(lines[0]?.amount.minor, 540n);
+    assert.deepEqual(lines[0]?.metadata?.taxedLineNos, ['1', '2', '3']);
+  });
+
+  it('keeps two rates in one jurisdiction apart, so the arithmetic stays checkable', () => {
+    const two = request({
+      lines: [
+        { ref: '1', description: 'Software', amount: usd(10_000n) },
+        { ref: '2', description: 'Printed manual', amount: usd(2_000n) },
+      ],
+    });
+    const mixed = quote({
+      amounts: [
+        { ...NY_STATE, ref: '1', amount: usd(2_000n), rate: Rate.fromDecimalString('0.2') },
+        {
+          ...NY_STATE,
+          ref: '2',
+          amount: usd(100n),
+          rate: Rate.fromDecimalString('0.05'),
+          description: 'VAT reduced 5%',
+        },
+      ],
+    });
+    assert.equal(taxLinesFrom(two, mixed).length, 2);
+  });
+
+  it('never merges a reverse charge into a taxed line, because it carries a sentence', () => {
+    const two = request({
+      lines: [
+        { ref: '1', description: 'Software', amount: usd(10_000n) },
+        { ref: '2', description: 'Support', amount: usd(2_000n) },
+      ],
+    });
+    const mixed = quote({
+      amounts: [
+        { ...NY_STATE, ref: '1', amount: usd(400n) },
+        {
+          ...NY_STATE,
+          ref: '2',
+          amount: usd(0n),
+          reverseCharge: true,
+          description: 'Reverse charge \u2014 Article 196',
+        },
+      ],
+    });
+    const lines = taxLinesFrom(two, mixed);
+    assert.equal(lines.length, 2);
+    assert.equal(lines[1]?.metadata?.reverseCharge, true);
   });
 
   it('drops a plain zero but keeps a reverse charge, which the document must state', () => {

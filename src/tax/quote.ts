@@ -105,15 +105,29 @@ const mustBeStated = (amount: TaxAmount): boolean => amount.reverseCharge === tr
 /**
  * The invoice lines a quote becomes. Add them to the draft, then finalize.
  *
- * One line per returned amount rather than one merged line per invoice, because
- * a US sale is taxed by a state and a county at once and a merged line cannot
- * be filed against either. `metadata` carries the machine-readable
- * jurisdiction, rate and source line; `description` carries what a human reads.
+ * The quote is per line, because that is what a calculator returns and what a
+ * filing needs — which jurisdiction taxed which sale. The *document* is per
+ * rate, because that is how an invoice reads. So amounts sharing a
+ * jurisdiction, a rate and a treatment are merged into one line, and the source
+ * line numbers travel in metadata.
  *
- * A zero amount is dropped unless it is a reverse charge or an exemption. Those
- * two are not the absence of tax — they are a statement the invoice is legally
- * required to make, and dropping them produces a document that is invalid in
- * the jurisdiction it was issued for.
+ * Not merging produces an invoice like this, which is the thing to avoid:
+ *
+ *   Subtotal          135.00
+ *   VAT 20% (Pro)      20.00
+ *   VAT 20% (Seats)     6.00
+ *   VAT 20% (Overage)   1.00
+ *
+ * Different rates stay apart even in one jurisdiction — a reduced-rate line
+ * beside a standard-rate one is two lines, because a customer checking the
+ * arithmetic has to be able to. So is a reverse charge beside a taxed line: the
+ * zero-amount row exists to carry a sentence, and merging it into a nonzero row
+ * would delete the sentence.
+ *
+ * A zero amount is otherwise dropped. A reverse charge and an exemption are not
+ * the absence of tax — they are statements the invoice is legally required to
+ * make, and dropping them produces a document that is invalid in the
+ * jurisdiction it was issued for.
  *
  * Refuses `pricing: 'inclusive'`. Extracting tax from a tax-inclusive price
  * reduces the revenue lines it came out of, which is a different operation on a
@@ -130,22 +144,34 @@ export function taxLinesFrom(request: TaxQuoteRequest, quote: TaxQuote): NewInvo
   }
   assertQuoteCovers(request, quote);
 
-  const lines: NewInvoiceLine[] = [];
+  const groups = new Map<string, { amount: TaxAmount; total: Money; refs: string[] }>();
   for (const amount of quote.amounts) {
     if (amount.amount.isZero() && !mustBeStated(amount)) continue;
-    lines.push({
-      kind: 'tax',
-      description: amount.description,
-      amount: amount.amount,
-      metadata: {
-        jurisdiction: amount.jurisdiction,
-        rate: amount.rate.toDecimalString(),
-        taxedLineNo: amount.ref,
-        ...(quote.ref === null ? {} : { quoteRef: quote.ref }),
-        ...(amount.reverseCharge === true ? { reverseCharge: true } : {}),
-        ...(amount.exempt === true ? { exempt: true } : {}),
-      },
-    });
+    const key = [
+      amount.jurisdiction,
+      amount.rate.toDecimalString(),
+      amount.reverseCharge === true ? 'rc' : '',
+      amount.exempt === true ? 'ex' : '',
+    ].join('|');
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, { amount, total: amount.amount, refs: [amount.ref] });
+    else {
+      group.total = group.total.plus(amount.amount);
+      group.refs.push(amount.ref);
+    }
   }
-  return lines;
+
+  return [...groups.values()].map(({ amount, total, refs }) => ({
+    kind: 'tax' as const,
+    description: amount.description,
+    amount: total,
+    metadata: {
+      jurisdiction: amount.jurisdiction,
+      rate: amount.rate.toDecimalString(),
+      taxedLineNos: refs,
+      ...(quote.ref === null ? {} : { quoteRef: quote.ref }),
+      ...(amount.reverseCharge === true ? { reverseCharge: true } : {}),
+      ...(amount.exempt === true ? { exempt: true } : {}),
+    },
+  }));
 }
