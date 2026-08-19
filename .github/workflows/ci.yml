@@ -41,7 +41,7 @@ jobs:
       BILLING_KIT_CLI_TEST_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v4
         with:
