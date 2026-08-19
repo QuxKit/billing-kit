@@ -62,10 +62,17 @@ export function taxTotal(invoice: Invoice): Money {
  *     duplicated response rather than a genuine second one. A US sale really is
  *     taxed by a state and a county at once, and those differ in
  *     `jurisdiction`.
- *   - a negative tax amount. A reversal is a credit note, not a negative tax.
+ *   - a negative amount against a line that was not itself negative. A
+ *     discount is a negative line and its tax is negative too — that is how
+ *     netting works when the quote is per line — but a negative tax on a sale
+ *     is a reversal, and a reversal is a credit note.
+ *   - a jurisdiction whose amounts sum to less than zero. This is the invariant
+ *     the per-line rule cannot express: individual lines net against each
+ *     other, and what has to be non-negative is what reaches the invoice.
  */
 export function assertQuoteCovers(request: TaxQuoteRequest, quote: TaxQuote): void {
   const refs = new Set(request.lines.map((line) => line.ref));
+  const negativeLines = new Set(request.lines.filter((line) => line.amount.isNegative()).map((line) => line.ref));
   const seen = new Set<string>();
   for (const amount of quote.amounts) {
     if (amount.amount.currency !== request.currency) {
@@ -82,10 +89,12 @@ export function assertQuoteCovers(request: TaxQuoteRequest, quote: TaxQuote): vo
         reason: `calculator taxed line ${amount.ref}, which was not in the request`,
       });
     }
-    if (amount.amount.isNegative()) {
+    if (amount.amount.isNegative() && !negativeLines.has(amount.ref)) {
       throw new BillingError({
         code: 'invalid_tax',
-        reason: `negative tax on line ${amount.ref} (${amount.jurisdiction}); a reversal is a credit note`,
+        reason:
+          `negative tax on line ${amount.ref} (${amount.jurisdiction}), which is not itself negative; ` +
+          'a reversal is a credit note',
       });
     }
     const key = `${amount.ref} ${amount.jurisdiction}`;
@@ -97,6 +106,24 @@ export function assertQuoteCovers(request: TaxQuoteRequest, quote: TaxQuote): vo
     }
     seen.add(key);
   }
+
+  for (const [jurisdiction, total] of totalsByJurisdiction(quote, request.currency)) {
+    if (total.isNegative()) {
+      throw new BillingError({
+        code: 'invalid_tax',
+        reason: `${jurisdiction} sums to ${total.toDecimalString()} across the invoice; tax owed cannot be negative`,
+      });
+    }
+  }
+}
+
+function totalsByJurisdiction(quote: TaxQuote, currency: string): Map<string, Money> {
+  const totals = new Map<string, Money>();
+  for (const amount of quote.amounts) {
+    const running = totals.get(amount.jurisdiction) ?? Money.zero(currency);
+    totals.set(amount.jurisdiction, running.plus(amount.amount));
+  }
+  return totals;
 }
 
 /** Whether an amount has to appear on the document even though it is zero. */
@@ -144,9 +171,11 @@ export function taxLinesFrom(request: TaxQuoteRequest, quote: TaxQuote): NewInvo
   }
   assertQuoteCovers(request, quote);
 
+  // Grouped before anything is dropped: a jurisdiction whose lines net to a
+  // nonzero total must reach the document even if one of its lines was zero,
+  // and one that nets to zero must not, however many nonzero lines it had.
   const groups = new Map<string, { amount: TaxAmount; total: Money; refs: string[] }>();
   for (const amount of quote.amounts) {
-    if (amount.amount.isZero() && !mustBeStated(amount)) continue;
     const key = [
       amount.jurisdiction,
       amount.rate.toDecimalString(),
@@ -161,17 +190,19 @@ export function taxLinesFrom(request: TaxQuoteRequest, quote: TaxQuote): NewInvo
     }
   }
 
-  return [...groups.values()].map(({ amount, total, refs }) => ({
-    kind: 'tax' as const,
-    description: amount.description,
-    amount: total,
-    metadata: {
-      jurisdiction: amount.jurisdiction,
-      rate: amount.rate.toDecimalString(),
-      taxedLineNos: refs,
-      ...(quote.ref === null ? {} : { quoteRef: quote.ref }),
-      ...(amount.reverseCharge === true ? { reverseCharge: true } : {}),
-      ...(amount.exempt === true ? { exempt: true } : {}),
-    },
-  }));
+  return [...groups.values()]
+    .filter(({ amount, total }) => !total.isZero() || mustBeStated(amount))
+    .map(({ amount, total, refs }) => ({
+      kind: 'tax' as const,
+      description: amount.description,
+      amount: total,
+      metadata: {
+        jurisdiction: amount.jurisdiction,
+        rate: amount.rate.toDecimalString(),
+        taxedLineNos: refs,
+        ...(quote.ref === null ? {} : { quoteRef: quote.ref }),
+        ...(amount.reverseCharge === true ? { reverseCharge: true } : {}),
+        ...(amount.exempt === true ? { exempt: true } : {}),
+      },
+    }));
 }

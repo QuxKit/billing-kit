@@ -116,12 +116,68 @@ describe('assertQuoteCovers', () => {
     );
   });
 
-  it('refuses a negative amount: a reversal is a credit note', () => {
+  it('refuses a negative amount on a line that was not itself negative', () => {
     const bad = quote({ amounts: [{ ...NY_STATE, amount: usd(-400n) }] });
     assert.throws(
       () => assertQuoteCovers(request(), bad),
       (e: unknown) => BillingError.hasCode(e, 'invalid_tax'),
     );
+  });
+
+  it('allows a negative amount on a discount line, which is how netting works', () => {
+    // The quote is per line, so a discount's contribution to the tax has to be
+    // able to be negative. What must not go negative is the jurisdiction total.
+    const withDiscount = request({
+      lines: [
+        { ref: '1', description: 'Pro plan', amount: usd(10_000n) },
+        { ref: '2', description: 'Coupon', amount: usd(-2_000n) },
+      ],
+    });
+    const netted = quote({
+      amounts: [
+        { ...NY_STATE, ref: '1', amount: usd(400n) },
+        { ...NY_STATE, ref: '2', amount: usd(-80n) },
+      ],
+    });
+    assert.doesNotThrow(() => assertQuoteCovers(withDiscount, netted));
+    const lines = taxLinesFrom(withDiscount, netted);
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0]?.amount.minor, 320n);
+  });
+
+  it('refuses a jurisdiction that sums to less than zero across the invoice', () => {
+    const withDiscount = request({
+      lines: [
+        { ref: '1', description: 'Pro plan', amount: usd(1_000n) },
+        { ref: '2', description: 'Coupon', amount: usd(-2_000n) },
+      ],
+    });
+    const upsideDown = quote({
+      amounts: [
+        { ...NY_STATE, ref: '1', amount: usd(40n) },
+        { ...NY_STATE, ref: '2', amount: usd(-80n) },
+      ],
+    });
+    assert.throws(
+      () => assertQuoteCovers(withDiscount, upsideDown),
+      (e: unknown) => BillingError.hasCode(e, 'invalid_tax'),
+    );
+  });
+
+  it('drops a jurisdiction whose lines net to zero, however many there were', () => {
+    const both = request({
+      lines: [
+        { ref: '1', description: 'Pro plan', amount: usd(2_000n) },
+        { ref: '2', description: 'Full refund line', amount: usd(-2_000n) },
+      ],
+    });
+    const nets = quote({
+      amounts: [
+        { ...NY_STATE, ref: '1', amount: usd(80n) },
+        { ...NY_STATE, ref: '2', amount: usd(-80n) },
+      ],
+    });
+    assert.deepEqual(taxLinesFrom(both, nets), []);
   });
 
   it('refuses the same jurisdiction twice on one line', () => {
