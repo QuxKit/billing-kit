@@ -76,6 +76,9 @@ export interface PaddleCapabilities extends ProviderCapabilities {
   readonly merchantOfRecord: true;
   readonly capturesPayment: true;
   readonly refundsAreAsynchronous: true;
+  /** Paddle recovers a failed payment itself: it is the merchant of record, so
+   *  the relationship with the payer is theirs and so is the retry. */
+  readonly retriesPayments: true;
   readonly createsSubscriptions: false;
   readonly customerLookup: readonly ['email'];
 }
@@ -173,6 +176,7 @@ export const createPaddleProvider = (config: PaddleConfig): BillingProvider<Padd
     merchantOfRecord: true,
     capturesPayment: true,
     refundsAreAsynchronous: true,
+    retriesPayments: true,
     createsSubscriptions: false,
     customerLookup: ['email'],
     idempotency,

@@ -119,6 +119,21 @@ export interface ProviderCapabilities {
    * synchronous provider does not grow a second code path that only it uses.
    */
   readonly refundsAreAsynchronous: boolean;
+  /**
+   * True when the provider retries a failed payment on its own schedule.
+   *
+   * The one capability that exists to stop us doing something rather than to
+   * let us. Stripe's Smart Retries and Paddle's recovery both charge the card
+   * again and both email the customer; a dunning policy that also retries
+   * charges twice and mails twice, and the customer reads that as our bug.
+   * `dunning/forProvider()` reads this and forces the policy to observe.
+   *
+   * Required rather than optional on purpose. The safe default would have to be
+   * `false`, and a provider adapter that forgot to say so would silently opt
+   * its users into double-dunning; a required field makes the omission a
+   * compile error in the adapter instead.
+   */
+  readonly retriesPayments: boolean;
   /** Provider-side request idempotency, if any. Null is a real answer. */
   readonly idempotency: ProviderIdempotency | null;
   /**

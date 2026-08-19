@@ -27,6 +27,7 @@ export {
   canCreateSubscriptions,
   canFindCustomer,
   ourAmountIsAuthoritative,
+  providerDuns,
   settlementModeFor,
   settlementPostsCash,
   supportsSettlement,

@@ -53,6 +53,14 @@ export type BillingFailure =
   | { code: 'invoice_state'; invoiceId: string; state: string; operation: string; wanted: readonly string[] }
   | { code: 'invalid_invoice'; reason: string }
 
+  // --- tax -----------------------------------------------------------------
+  /** A tax calculator answered with something that cannot go on the invoice —
+   *  the wrong currency, a line we did not send, a negative amount. Ours to
+   *  raise rather than the adapter's, because the check has to run on the live
+   *  path: what it catches is a vendor's response shape changing under an
+   *  integration that was passing its own tests yesterday. */
+  | { code: 'invalid_tax'; reason: string }
+
   // --- general -------------------------------------------------------------
   | { code: 'not_found'; what: string; id: string }
   | { code: 'provider_error'; provider: string; operation: string; detail: string };
@@ -98,6 +106,8 @@ function describe(failure: BillingFailure): string {
       return `ledger transaction does not sum to zero in ${failure.currency}: residual ${failure.residualMinor}`;
     case 'invoice_state':
       return `invoice ${failure.invoiceId} is ${failure.state}; ${failure.operation} needs ${failure.wanted.join(' or ')}`;
+    case 'invalid_tax':
+      return `tax calculation rejected: ${failure.reason}`;
     case 'invalid_invoice':
       return `invalid invoice: ${failure.reason}`;
     case 'not_found':

@@ -34,6 +34,7 @@ psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/020_subscriptions.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/030_provider_events.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/031_invoices.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/032_plan_changes.sql
+psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/033_tax_lines.sql
 psql -v ON_ERROR_STOP=1 -d "$DATABASE" -f sql/090_rls.sql   # optional
 psql -d "$DATABASE" -c 'SELECT billing.ensure_partitions()'
 ```
@@ -59,6 +60,7 @@ schema, and none of this is in the schema.
 | `020_subscriptions.sql` | `subscriptions` and `subscription_periods` — the recurring-plan half (`billing-kit/subscriptions`). Not partitioned: bounded by customers, not traffic. Needs `001_core` only; the sweep posts each period's charge into its ledger. |
 | `031_invoices.sql` | `invoices`, `invoice_lines`, `invoice_counters` (`billing-kit/invoices`), plus `subscription_periods.charge_lines` — the persisted charge breakdown an invoice is built from. Needs `001_core` and `020_subscriptions`. |
 | `032_plan_changes.sql` | `plan_changes` (the audit/idempotency row for `changePlan`) and `subscriptions.pending_plan_id` (a period-end change waiting for the advance). Needs `020_subscriptions`. |
+| `033_tax_lines.sql` | Widens `invoice_lines_kind_known` to admit `tax`, the line kind a `TaxCalculator`'s answer becomes (`billing-kit/tax`). A separate file because `031` is already checksummed. Needs `031_invoices`. |
 | `090_rls.sql` | Optional. ENABLE + FORCE row-level security on every table with `tenant_id`, policy on `current_setting('tenancy.tenant_id', true)` (tenant-kit's `SET LOCAL` convention). Discovers tables by column; re-run after adding one. See README "Row-level security". |
 | `030_provider_events.sql` | `provider_events` — the webhook replay guard, keyed `(provider, provider_event_id)`. `applyVerifiedEvent` claims a row here and posts into `001_core`'s ledger in the same transaction. Needs `001_core` only. |
 

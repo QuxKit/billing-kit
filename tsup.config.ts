@@ -73,6 +73,8 @@ export default defineConfig([
       'src/subscriptions/index.ts',
       'src/invoices/index.ts',
       'src/entitlements/index.ts',
+      'src/tax/index.ts',
+      'src/dunning/index.ts',
       'src/pg.ts',
     ],
     format: ['esm', 'cjs'],
