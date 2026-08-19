@@ -52,6 +52,17 @@ export {
   walletTopupPosting,
 } from './ledger';
 export type { MoneyJSON, PackagePrice, PricedAmount, Tier, TierMode } from './money';
+
+// Display formatting. Separate from the values on purpose — see src/format.ts.
+export type { DisplayOptions } from './format';
+export {
+  displayDefaults,
+  formatMoney,
+  formatQuantity,
+  formatRate,
+  resetDisplayDefaults,
+  setDisplayDefaults,
+} from './format';
 export {
   allocate,
   currencyExponent,
