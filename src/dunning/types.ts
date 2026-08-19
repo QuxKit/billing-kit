@@ -55,15 +55,24 @@ export type DunningActionKind =
   /** Give up on the money: `markUncollectible` on the invoice. */
   | 'write_off';
 
-/** One action, with the context the host needs to carry it out. */
+/**
+ * One action, with the context the host needs to carry it out.
+ *
+ * `(tenantId, settlementRef, step)` is unique, and it is meant to be used:
+ * the sweep advances the case *before* it hands the actions back, so a host
+ * that crashes between the two loses the send rather than repeating it. Keying
+ * the side effect on this triple makes a re-drive safe, and makes the missing
+ * send recoverable by replaying the step.
+ */
 export interface DunningAction {
   kind: DunningActionKind;
   /**
    * Which step produced it, 1-based. A notify carries it so the host can pick
-   * the third email rather than the first, without the host having to
-   * re-derive the schedule it already gave us.
+   * the third email rather than the first, without having to re-derive the
+   * schedule it already gave us.
    */
   step: number;
+  tenantId: TenantId;
   /** The case it belongs to, so a batch of decisions stays attributable. */
   settlementRef: string;
 }

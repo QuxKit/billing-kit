@@ -101,26 +101,57 @@ stopped pursuing the money; the action records that the invoice was posted
 uncollectible. A host that suspends but keeps the receivable on the books omits
 the action and still gets the closed case.
 
-## What is not built yet
+## Persistence
 
-Persistence. There is no `billing.dunning_cases` table and no
-`advanceDunning(db, now)` sweep — see issue #35. When they land they will be
-shaped like `chargeDueSubscriptions`: a transaction-scoped advisory lease so a
-second sweep is a no-op, `FOR UPDATE SKIP LOCKED` per case, one case per call,
-no schedule and no HTTP.
+`sql/034_dunning.sql` holds one row per failed settlement, unique on
+`(tenant_id, settlement_ref)`. That uniqueness is the whole idempotency story: a
+`payment.failed` webhook delivered three times opens one case, and a provider's
+own retry failing again a day later lands on the same case rather than starting
+a second ladder for the same debt.
 
-The intended loop:
+```ts
+import { advanceDunning, closeCase, openCase } from '@quxkit/billing-kit/dunning';
 
-1. a verified `payment.failed` arrives
-2. open a case, or find the open one for that settlement ref — idempotent on
-   `(tenantId, settlementRef)`, so three deliveries of the same webhook open one
-   case and a provider's own failed retry reuses it rather than starting a
-   second ladder for the same debt
-3. a cron the host owns calls the sweep
-4. `decide` per case; perform the returned actions; write the new state
-5. a verified `payment.succeeded` closes the case as `recovered`
+// 1. a verified payment.failed arrives
+await openCase(db, { tenantId, subjectId, settlementRef, provider, amount, reason }, policy, now);
 
-The contract above is usable today by a host that keeps the cases itself.
+// 2. a cron the host owns, as often as it likes
+const report = await advanceDunning(db, {
+  policy: (c) => ladderFor(c),
+  capabilities: (name) => providers[name]?.capabilities,
+});
+for (const action of report.actions) await perform(action);
+
+// 3. a verified payment.succeeded
+await closeCase(db, { tenantId, settlementRef }, 'recovered', now);
+```
+
+**Step 3 is not optional.** A case left open after the money arrives keeps its
+`nextActionAt`, and the next sweep suspends a customer who has paid. It is a
+missing call rather than a wrong one, so nothing will announce it.
+
+`capabilities` is a required option, and required for one reason: `forProvider`
+is applied inside the sweep from its answer. Making it optional would let a host
+wire everything up, forget the question, and double-charge every customer on
+Stripe — the exact failure the capability exists to prevent, reintroduced one
+layer up. Return `undefined` for a provider you cannot answer for and its cases
+are skipped and reported, not guessed at.
+
+### Two things the sweep does that are worth knowing
+
+**One step per case per call, rescheduled from when the step fired.** A cron
+that was down for a fortnight does not owe a customer three emails and a
+suspension in one second; it fires step one today and step two on step one's
+schedule. This differs from `chargeDueSubscriptions`, which really does need to
+catch up period by period, and the difference is deliberate.
+
+**The state commits before the actions come back.** The sweep's work is an
+email, and an email cannot be rolled back, so it cannot finish inside the
+transaction the way a ledger post can. Committing first makes the crash window a
+*missed* send rather than a duplicated one — the right way round, since a
+customer emailed twice about a failed payment complains and one emailed late
+does not notice. Every action carries `(tenantId, settlementRef, step)`, so
+replaying a step is safe and a missed send is recoverable.
 
 ## What a hosted add-on could add
 
