@@ -57,8 +57,13 @@ export function forProvider(policy: DunningPolicy, capabilities: { retriesPaymen
   return { ...policy, mode: 'observe' };
 }
 
-const actionsOf = (step: DunningStep, index: number, settlementRef: string): DunningAction[] =>
-  step.actions.map((kind: DunningActionKind) => ({ kind, step: index, settlementRef }));
+const actionsOf = (step: DunningStep, index: number, c: DunningCase): DunningAction[] =>
+  step.actions.map((kind: DunningActionKind) => ({
+    kind,
+    step: index,
+    tenantId: c.tenantId,
+    settlementRef: c.settlementRef,
+  }));
 
 /**
  * What to do with one case, now.
@@ -122,7 +127,7 @@ export function decide(input: { dunningCase: DunningCase; policy: DunningPolicy;
   if (step === undefined) {
     const index = policy.steps.length + 1;
     return {
-      actions: actionsOf(policy.onExhausted, index, c.settlementRef),
+      actions: actionsOf(policy.onExhausted, index, c),
       state: 'written_off',
       attempts: c.attempts + 1,
       nextActionAt: null,
@@ -133,7 +138,7 @@ export function decide(input: { dunningCase: DunningCase; policy: DunningPolicy;
   const index = c.attempts + 1;
   const next: DunningStep = policy.steps[index] ?? policy.onExhausted;
   return {
-    actions: actionsOf(step, index, c.settlementRef),
+    actions: actionsOf(step, index, c),
     state: 'open',
     attempts: index,
     nextActionAt: after(now, next.afterHours),
