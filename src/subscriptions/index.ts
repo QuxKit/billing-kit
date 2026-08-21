@@ -22,6 +22,8 @@ export { applyDiscount, discountForPeriod } from './discount.ts';
 export type { Subscriptions, SubscriptionsOptions } from './instance.ts';
 export { createSubscriptions } from './instance.ts';
 export { addInterval, chargeForPeriod, daysInPeriod, definePlan } from './plan.ts';
+export type { BundleDefinition, BundleItem } from './bundle.ts';
+export { defineBundle } from './bundle.ts';
 export type { ChargePeriodInput, ChargePeriodResult } from './settle.ts';
 export { chargeLinesJSON, chargeSubscriptionPeriod, prorationFor } from './settle.ts';
 export type { CreateSubscriptionInput, SubscriptionRef } from './store.ts';

@@ -118,7 +118,7 @@ export function chargeForPeriod(plan: Plan, input: PeriodChargeInput = {}): Peri
   // a base fee of 0.00 is not a fee, and an invoice should not show one.
   if (!trial && !plan.flat.isZero()) {
     const amount = prorate(plan.flat);
-    if (!amount.isZero()) lines.push({ kind: 'flat', description: `${plan.id} base`, amount });
+    if (!amount.isZero()) lines.push({ kind: 'flat', description: `${plan.id} base`, amount, productId: plan.productId });
   }
 
   if (!trial && plan.seats) {
@@ -132,6 +132,7 @@ export function chargeForPeriod(plan: Plan, input: PeriodChargeInput = {}): Peri
           description: `${count} seat${count === 1 ? '' : 's'}`,
           amount,
           quantity: Quantity.fromBigInt(BigInt(count)),
+          productId: plan.productId,
         });
       }
     }
@@ -158,6 +159,7 @@ export function chargeForPeriod(plan: Plan, input: PeriodChargeInput = {}): Peri
       amount: priced.amount,
       quantity: billable,
       residueMinor: priced.residueMinor,
+      productId: comp.productId ?? plan.productId,
     });
   }
 
