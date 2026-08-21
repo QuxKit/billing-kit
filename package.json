@@ -1,6 +1,6 @@
 {
   "name": "@quxkit/billing-kit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Usage-based billing as a library, over a provider you choose.",
   "license": "Apache-2.0",
   "author": "BRETT",
@@ -154,6 +154,6 @@
     "pg": "^8.23.0",
     "tsup": "^8.5.1",
     "tsx": "^4.19.2",
-    "typescript": "^7.0.2"
+    "typescript": "~5.6.3"
   }
 }

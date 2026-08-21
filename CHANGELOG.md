@@ -6,6 +6,15 @@ All notable changes to `@quxkit/billing-kit` are recorded here. The format is
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-21
+
+Cut promptly because the 0.2.0 version string is burned: a tarball packed from
+main AFTER the changes below landed was circulated (vendored in
+billing-kit-portal and quxkit-admin) still stamped 0.2.0, so 0.2.0 no longer
+names one content. TypeScript dedupes packages by name@version — two 0.2.0s in
+one workspace resolve to whichever loads first. This release gives the new
+content its own number; the real 0.2.0 of 2026-08-17 is unchanged.
+
 ### Added — multi-product subjects and bundles (#38)
 
 - `activeSubscriptions` (plural), and `check`/`list` now consult EVERY active
@@ -25,6 +34,11 @@ All notable changes to `@quxkit/billing-kit` are recorded here. The format is
   are mixed intervals and a second seat definition (those are phase 2:
   subscription items). Bundle discounts are the existing whole-subtotal
   `DiscountRule`.
+
+### Fixed
+
+- `pnpm build` crashed in tsup's dts worker (`useCaseSensitiveFileNames`)
+  under TypeScript 5.9; `typescript` is now pinned to `~5.6.3` (#41).
 
 ## [0.2.0] - 2026-08-17
 
