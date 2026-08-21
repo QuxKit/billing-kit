@@ -72,24 +72,56 @@ const SELECT = `SELECT ${SUBSCRIPTION_COLUMNS} FROM billing.subscriptions`;
 
 /**
  * The subscription active for a subject at an instant: started, not canceled
- * before it. When a subject somehow has more than one, the most recently
- * started wins — a plan change that created a new row supersedes the old.
+ * before it. When a subject holds more than one, this returns the newest —
+ * kept for compatibility; entitlement checks use activeSubscriptions and
+ * consult all of them.
  */
 export async function activeSubscription(
   db: SqlExecutor,
   q: { tenantId: TenantId; subjectId: SubjectId; at: Date },
 ): Promise<Subscription | null> {
+  const subs = await activeSubscriptions(db, q);
+  return subs[0] ?? null;
+}
+
+/**
+ * Every subscription active for the subject at `at`, newest first.
+ *
+ * A subject holding several — one per product, which UNIQUE (tenant_id, key)
+ * has always permitted — is a supported state, not an anomaly: check() and
+ * list() consult ALL of them. The old behaviour, where the newest
+ * subscription eclipsed every entitlement of the ones before it, meant that
+ * buying a second product silently revoked the first.
+ */
+export async function activeSubscriptions(
+  db: SqlExecutor,
+  q: { tenantId: TenantId; subjectId: SubjectId; at: Date },
+): Promise<Subscription[]> {
   const rows = await db.query<SubscriptionRow>(
     `${SELECT}
       WHERE tenant_id = $1 AND subject_id = $2
         AND started_at <= $3
         AND (state <> 'canceled' OR canceled_at IS NULL OR canceled_at > $3)
-      ORDER BY started_at DESC
-      LIMIT 1`,
+      ORDER BY started_at DESC`,
     [q.tenantId, q.subjectId, q.at],
   );
-  const row = rows[0];
-  return row === undefined ? null : toSubscription(row);
+  return rows.map(toSubscription);
+}
+
+/**
+ * Of two verdicts for the same feature, the one the subject would rather
+ * keep: any allowed beats any denial; among allowed, the larger remaining
+ * allowance (boolean grants are unbounded and beat metered); among denials,
+ * the larger limit — the row closest to having worked.
+ */
+function morePermissive(a: Entitlement, b: Entitlement): Entitlement {
+  if (a.allowed !== b.allowed) return a.allowed ? a : b;
+  const span = (e: Entitlement): bigint => {
+    if (e.kind === 'boolean') return BigInt('9'.repeat(30));
+    if (e.allowed) return e.remaining?.units ?? 0n;
+    return e.limit?.units ?? 0n;
+  };
+  return span(b) > span(a) ? b : a;
 }
 
 /**
@@ -172,18 +204,57 @@ async function checkFeature(
     : { ...base, allowed: false, reason: 'wallet_empty', wallet };
 }
 
-/** May `subjectId` use `feature` at `at`? */
+/**
+ * May `subjectId` use `feature` at `at`? Consults EVERY active subscription:
+ * a subject with billing-kit Cloud and mail-kit Pro holds the union of both
+ * plans' features, and where both define the same key the more permissive
+ * verdict wins. An unknown plan on any subscription denies loudly rather
+ * than being skipped — a resolver that forgot a plan is a bug, not a gap.
+ */
 export async function check(db: SqlExecutor, q: EntitlementQuery): Promise<Entitlement> {
   const at = q.at ?? new Date();
-  const sub = await activeSubscription(db, { tenantId: q.tenantId, subjectId: q.subjectId, at });
-  if (sub === null) return denied(q.feature, 'no_subscription');
-  const plan = await q.plan(sub.planId);
-  if (plan === undefined) return denied(q.feature, 'unknown_plan', { subscriptionId: sub.id, planId: sub.planId });
-  const def = plan.features?.[q.feature];
-  if (def === undefined) {
-    return denied(q.feature, 'not_in_plan', { subscriptionId: sub.id, planId: plan.id });
+  const subs = await activeSubscriptions(db, { tenantId: q.tenantId, subjectId: q.subjectId, at });
+  if (subs.length === 0) return denied(q.feature, 'no_subscription');
+
+  const candidates: Array<{ sub: Subscription; plan: Plan; def: PlanFeature }> = [];
+  for (const sub of subs) {
+    const plan = await q.plan(sub.planId);
+    if (plan === undefined) {
+      return denied(q.feature, 'unknown_plan', { subscriptionId: sub.id, planId: sub.planId });
+    }
+    const def = plan.features?.[q.feature];
+    if (def !== undefined) candidates.push({ sub, plan, def });
   }
-  return checkFeature(db, { tenantId: q.tenantId, subjectId: q.subjectId, at }, sub, plan, q.feature, def);
+  const first = subs[0] as Subscription;
+  if (candidates.length === 0) {
+    return denied(q.feature, 'not_in_plan', { subscriptionId: first.id, planId: first.planId });
+  }
+
+  // A boolean grant is unbounded; no metered verdict can beat it.
+  const granted = candidates.find((c) => c.def === true);
+  if (granted) {
+    return {
+      feature: q.feature,
+      allowed: true,
+      kind: 'boolean',
+      subscriptionId: granted.sub.id,
+      planId: granted.plan.id,
+    };
+  }
+
+  let best: Entitlement | null = null;
+  for (const c of candidates) {
+    const verdict = await checkFeature(
+      db,
+      { tenantId: q.tenantId, subjectId: q.subjectId, at },
+      c.sub,
+      c.plan,
+      q.feature,
+      c.def,
+    );
+    best = best === null ? verdict : morePermissive(best, verdict);
+  }
+  return best as Entitlement;
 }
 
 export interface EntitlementListQuery {
@@ -200,17 +271,31 @@ export interface EntitlementListQuery {
  */
 export async function list(db: SqlExecutor, q: EntitlementListQuery): Promise<Entitlement[]> {
   const at = q.at ?? new Date();
-  const sub = await activeSubscription(db, { tenantId: q.tenantId, subjectId: q.subjectId, at });
-  if (sub === null) return [];
-  const plan = await q.plan(sub.planId);
-  if (plan === undefined) {
-    throw new BillingError({ code: 'not_found', what: 'plan', id: sub.planId });
+  const subs = await activeSubscriptions(db, { tenantId: q.tenantId, subjectId: q.subjectId, at });
+  if (subs.length === 0) return [];
+  // The union across every active subscription, in first-seen order. Where
+  // two plans define the same key, the more permissive verdict is kept —
+  // same rule as check(), so the list never disagrees with the checks.
+  const byFeature = new Map<string, Entitlement>();
+  for (const sub of subs) {
+    const plan = await q.plan(sub.planId);
+    if (plan === undefined) {
+      throw new BillingError({ code: 'not_found', what: 'plan', id: sub.planId });
+    }
+    for (const [feature, def] of Object.entries(plan.features ?? {})) {
+      const verdict = await checkFeature(
+        db,
+        { tenantId: q.tenantId, subjectId: q.subjectId, at },
+        sub,
+        plan,
+        feature,
+        def,
+      );
+      const prior = byFeature.get(feature);
+      byFeature.set(feature, prior === undefined ? verdict : morePermissive(prior, verdict));
+    }
   }
-  const out: Entitlement[] = [];
-  for (const [feature, def] of Object.entries(plan.features ?? {})) {
-    out.push(await checkFeature(db, { tenantId: q.tenantId, subjectId: q.subjectId, at }, sub, plan, feature, def));
-  }
-  return out;
+  return [...byFeature.values()];
 }
 
 export interface EntitlementsOptions {

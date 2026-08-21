@@ -35,6 +35,9 @@ export type UsagePrice =
   | { kind: 'package'; package: PackagePrice };
 
 export interface PlanUsage {
+  /** The product this component belongs to, when the plan is a bundle.
+   *  Stamped onto the usage charge line; defaults to the plan's productId. */
+  productId?: string;
   /** The metric this prices — matches a metering `metric` (`tokens.input`). */
   metric: string;
   /** Granted free each period before overage is charged. Omit for none. */
@@ -82,6 +85,10 @@ export interface PlanSeats {
  */
 export interface Plan {
   id: string;
+  /** Which product this plan sells. Optional — single-product hosts never
+   *  need it; bundles stamp it per usage line so a combined invoice can be
+   *  grouped. Free-form, host-defined ('billing-kit-cloud', 'mail-kit'). */
+  productId?: string;
   currency: string;
   interval: BillingInterval;
   /** Recurring base fee. `Money.zero` for a pure pay-as-you-go plan. */
@@ -100,6 +107,9 @@ export interface ChargeLine {
   kind: 'flat' | 'seats' | 'usage' | 'discount';
   description: string;
   amount: Money;
+  /** The product this line belongs to, when the plan carries one. Rides into
+   *  invoice line metadata so a bundle invoice can be grouped per product. */
+  productId?: string;
   /** Present on usage and seat lines. */
   metric?: string;
   quantity?: Quantity;
