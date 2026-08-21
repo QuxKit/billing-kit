@@ -22,6 +22,7 @@ export interface StoredChargeLine {
   metric?: string;
   quantity?: string;
   residueMinor?: string;
+  productId?: string;
 }
 
 const KIND: Record<StoredChargeLine['kind'], InvoiceLineKind> = {
@@ -40,7 +41,15 @@ export function linesFromCharge(stored: readonly StoredChargeLine[]): NewInvoice
     amount: Money.fromMinor(l.amount.amount, l.amount.currency),
     metric: l.metric,
     quantity: l.quantity === undefined ? undefined : Quantity.fromDecimalString(l.quantity),
-    metadata: l.residueMinor === undefined ? undefined : { residueMinor: l.residueMinor },
+    metadata:
+      l.residueMinor === undefined && l.productId === undefined
+        ? undefined
+        : {
+            ...(l.residueMinor === undefined ? {} : { residueMinor: l.residueMinor }),
+            // The product dimension: what lets a bundle invoice be grouped
+            // and sub-totalled per product without a schema change.
+            ...(l.productId === undefined ? {} : { productId: l.productId }),
+          },
   }));
 }
 

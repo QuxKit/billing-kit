@@ -84,6 +84,7 @@ export function chargeLinesJSON(lines: readonly ChargeLine[]): string {
       ...(l.metric === undefined ? {} : { metric: l.metric }),
       ...(l.quantity === undefined ? {} : { quantity: l.quantity.toDecimalString() }),
       ...(l.residueMinor === undefined ? {} : { residueMinor: l.residueMinor }),
+      ...(l.productId === undefined ? {} : { productId: l.productId }),
     })),
   );
 }

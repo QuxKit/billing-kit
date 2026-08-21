@@ -6,6 +6,26 @@ All notable changes to `@quxkit/billing-kit` are recorded here. The format is
 
 ## [Unreleased]
 
+### Added — multi-product subjects and bundles (#38)
+
+- `activeSubscriptions` (plural), and `check`/`list` now consult EVERY active
+  subscription of a subject: features union across plans, and where two plans
+  define the same key the more permissive verdict wins. Fixes the eclipse
+  where buying a second product silently revoked the first product's
+  entitlements (`activeSubscription` was `LIMIT 1`; it remains, answering the
+  newest, for compatibility).
+- The product dimension, additive end to end: `Plan.productId?`,
+  `PlanUsage.productId?`, `ChargeLine.productId?`, carried through
+  `chargeLinesJSON` into invoice line `metadata.productId` — a bundle invoice
+  can be grouped and sub-totalled per product with no schema change.
+- `defineBundle({ id, items: [{ productId, plan }] })`: composes same-currency,
+  same-interval member plans into one chargeable, checkable Plan — flats
+  summed, usage concatenated with per-product tags, features merged. Metric
+  and feature-key collisions are refused with instructions to namespace, as
+  are mixed intervals and a second seat definition (those are phase 2:
+  subscription items). Bundle discounts are the existing whole-subtotal
+  `DiscountRule`.
+
 ## [0.2.0] - 2026-08-17
 
 ### Added
