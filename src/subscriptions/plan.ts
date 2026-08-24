@@ -118,7 +118,8 @@ export function chargeForPeriod(plan: Plan, input: PeriodChargeInput = {}): Peri
   // a base fee of 0.00 is not a fee, and an invoice should not show one.
   if (!trial && !plan.flat.isZero()) {
     const amount = prorate(plan.flat);
-    if (!amount.isZero()) lines.push({ kind: 'flat', description: `${plan.id} base`, amount, productId: plan.productId });
+    if (!amount.isZero())
+      lines.push({ kind: 'flat', description: `${plan.id} base`, amount, productId: plan.productId });
   }
 
   if (!trial && plan.seats) {

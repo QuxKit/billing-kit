@@ -14,16 +14,15 @@
 // keeps. There is no path here that credits a balance from anything but a
 // verified payment webhook.
 
+export type { BundleDefinition, BundleItem } from './bundle.ts';
+export { defineBundle } from './bundle.ts';
 export type { ChangeBehaviour, ChangePlanInput, ChangePlanResult } from './change.ts';
 export { changePlan } from './change.ts';
 export type { Coupon, CouponDuration, DiscountRule } from './discount.ts';
-
 export { applyDiscount, discountForPeriod } from './discount.ts';
 export type { Subscriptions, SubscriptionsOptions } from './instance.ts';
 export { createSubscriptions } from './instance.ts';
 export { addInterval, chargeForPeriod, daysInPeriod, definePlan } from './plan.ts';
-export type { BundleDefinition, BundleItem } from './bundle.ts';
-export { defineBundle } from './bundle.ts';
 export type { ChargePeriodInput, ChargePeriodResult } from './settle.ts';
 export { chargeLinesJSON, chargeSubscriptionPeriod, prorationFor } from './settle.ts';
 export type { CreateSubscriptionInput, SubscriptionRef } from './store.ts';
