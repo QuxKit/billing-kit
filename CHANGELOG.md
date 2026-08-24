@@ -6,6 +6,23 @@ All notable changes to `@quxkit/billing-kit` are recorded here. The format is
 
 ## [Unreleased]
 
+### Changed
+
+- The release workflow publishes `--access restricted`, matching what
+  `publishConfig.access` in package.json has always said. It ran
+  `--access public`, and the CLI flag wins over publishConfig — so a `v*` tag
+  would have put a package configured private onto the public registry.
+- `--provenance` and the `id-token: write` permission it needs are removed while
+  this repository is private: npm generates provenance attestations only from a
+  public repo, so the publish step would have failed even once lint was green.
+  release.yml lists what moves together on the day this goes public.
+
+### Fixed
+
+- `pnpm lint` is green. Four biome errors — export/import ordering and one line
+  wrap, from #38/#39 — failed the release workflow's Verify step before publish
+  was ever reached. No behaviour changed; re-export order is not semantic.
+
 ## [0.3.0] - 2026-08-21
 
 Cut promptly because the 0.2.0 version string is burned: a tarball packed from
