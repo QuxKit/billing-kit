@@ -4,6 +4,16 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # TypeScript majors are held, not skipped. Source is already clean under
+      # 7 — `tsc --noEmit` passes on every kit — but tsup 8.5.1 inlines
+      # rollup-plugin-dts 6.1.1, which reads a TypeScript internal that moved,
+      # so the declaration build dies with "Cannot read properties of undefined
+      # (reading 'useCaseSensitiveFileNames')". rollup-plugin-dts 6.5.1 supports
+      # TS 7, but tsup compiles it in, so it cannot be overridden. Remove this
+      # entry once tsup ships a release carrying the newer plugin.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
     groups:
       dev-dependencies:
         dependency-type: development
