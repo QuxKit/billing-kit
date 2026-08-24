@@ -45,7 +45,6 @@ jobs:
       # authentication ("client password must be a string"). With REQUIRE_DB=1
       # that is a failure rather than a skip, by design, so the URL is supplied.
       BILLING_KIT_CLI_TEST_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
-      BILLING_KIT_CLI_TEST_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
 
     steps:
       - uses: actions/checkout@v7
