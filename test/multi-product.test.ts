@@ -12,7 +12,7 @@ import { readFile } from 'node:fs/promises';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
-
+import type { PlanResolver } from '../src/entitlements/index.ts';
 import { activeSubscription, activeSubscriptions, check, list } from '../src/entitlements/index.ts';
 import { BillingError } from '../src/errors';
 import { record } from '../src/events';
@@ -20,7 +20,6 @@ import { Money, Quantity, Rate } from '../src/money';
 import { defineBundle } from '../src/subscriptions/bundle.ts';
 import { chargeForPeriod, definePlan } from '../src/subscriptions/plan.ts';
 import { createSubscription } from '../src/subscriptions/store.ts';
-import type { PlanResolver } from '../src/entitlements/index.ts';
 import type { Plan } from '../src/subscriptions/types.ts';
 import type { SqlExecutor } from '../src/types';
 import { fromPool, SKIP_REASON, TEST_DATABASE_URL, unreachable } from './pg-executor';
@@ -80,7 +79,7 @@ const MAILPRO: Plan = definePlan({
 });
 
 const resolve: PlanResolver = async (id) =>
-  ({ 'cloud-monthly': CLOUD, 'mail-pro-monthly': MAILPRO } as Record<string, Plan>)[id];
+  (({ 'cloud-monthly': CLOUD, 'mail-pro-monthly': MAILPRO }) as Record<string, Plan>)[id];
 
 const harness = await setup();
 after(() => harness?.close());
@@ -89,17 +88,35 @@ describe('entitlements across products', { skip: harness === null ? SKIP_REASON 
   const db = (harness as NonNullable<typeof harness>).db;
 
   it('a second product no longer eclipses the first (the LIMIT 1 regression)', async () => {
-    await createSubscription(db, { tenantId: T, subjectId: 'acme', key: 'acme-cloud', plan: CLOUD, startAt: START }, START);
+    await createSubscription(
+      db,
+      { tenantId: T, subjectId: 'acme', key: 'acme-cloud', plan: CLOUD, startAt: START },
+      START,
+    );
     const later = new Date('2026-08-02T00:00:00Z');
-    await createSubscription(db, { tenantId: T, subjectId: 'acme', key: 'acme-mail', plan: MAILPRO, startAt: later }, later);
+    await createSubscription(
+      db,
+      { tenantId: T, subjectId: 'acme', key: 'acme-mail', plan: MAILPRO, startAt: later },
+      later,
+    );
 
     const subs = await activeSubscriptions(db, { tenantId: T, subjectId: 'acme', at: NOW });
     assert.equal(subs.length, 2, 'both subscriptions are active');
-    assert.equal((await activeSubscription(db, { tenantId: T, subjectId: 'acme', at: NOW }))?.planId, 'mail-pro-monthly', 'the singular still answers newest, for compatibility');
+    assert.equal(
+      (await activeSubscription(db, { tenantId: T, subjectId: 'acme', at: NOW }))?.planId,
+      'mail-pro-monthly',
+      'the singular still answers newest, for compatibility',
+    );
 
     // The regression: 'billing.dashboard' lives only on the OLDER subscription.
-    const dashboard = await check(db, { tenantId: T, subjectId: 'acme', feature: 'billing.dashboard', plan: resolve, at: NOW });
-    assert.equal(dashboard.allowed, true, 'the older product\'s entitlement survives the newer purchase');
+    const dashboard = await check(db, {
+      tenantId: T,
+      subjectId: 'acme',
+      feature: 'billing.dashboard',
+      plan: resolve,
+      at: NOW,
+    });
+    assert.equal(dashboard.allowed, true, "the older product's entitlement survives the newer purchase");
     assert.equal(dashboard.planId, 'cloud-monthly');
 
     const mail = await check(db, { tenantId: T, subjectId: 'acme', feature: 'mail.domains', plan: resolve, at: NOW });
@@ -159,8 +176,11 @@ describe('bundles', () => {
         { productId: 'mail-kit-cloud', plan: MAIL_B },
       ],
     });
-    assert.deepEqual(Object.keys(bundle.features ?? {}).sort(), ['billing.dashboard', 'mail.domains'],
-      'the bundle carries the union of member features');
+    assert.deepEqual(
+      Object.keys(bundle.features ?? {}).sort(),
+      ['billing.dashboard', 'mail.domains'],
+      'the bundle carries the union of member features',
+    );
     assert.equal(bundle.flat.toDecimalString(), '68.00', 'flats sum');
     assert.equal(bundle.usage.length, 2);
 
@@ -186,20 +206,42 @@ describe('bundles', () => {
   it('refuses the compositions that would misprice', () => {
     const clash = definePlan({ ...MAILPRO, id: 'clash', usage: CLOUD.usage });
     assert.throws(
-      () => defineBundle({ id: 'x', items: [{ productId: 'a', plan: CLOUD }, { productId: 'b', plan: clash }] }),
+      () =>
+        defineBundle({
+          id: 'x',
+          items: [
+            { productId: 'a', plan: CLOUD },
+            { productId: 'b', plan: clash },
+          ],
+        }),
       (e: unknown) => e instanceof BillingError && /metric 'billing.events' is sold by both/.test(e.message),
     );
 
     const annual = definePlan({ ...MAILPRO, id: 'mail-annual', interval: 'year', features: undefined });
     assert.throws(
-      () => defineBundle({ id: 'x', items: [{ productId: 'a', plan: CLOUD }, { productId: 'b', plan: annual }] }),
+      () =>
+        defineBundle({
+          id: 'x',
+          items: [
+            { productId: 'a', plan: CLOUD },
+            { productId: 'b', plan: annual },
+          ],
+        }),
       (e: unknown) => e instanceof BillingError && /mixed intervals/.test(e.message),
     );
 
     const featureClash = definePlan({ ...MAILPRO, id: 'fc', usage: [], features: CLOUD.features });
     assert.throws(
-      () => defineBundle({ id: 'x', items: [{ productId: 'a', plan: CLOUD }, { productId: 'b', plan: featureClash }] }),
-      (e: unknown) => e instanceof BillingError && /feature '(billing\.dashboard|api)' is defined by both/.test(e.message),
+      () =>
+        defineBundle({
+          id: 'x',
+          items: [
+            { productId: 'a', plan: CLOUD },
+            { productId: 'b', plan: featureClash },
+          ],
+        }),
+      (e: unknown) =>
+        e instanceof BillingError && /feature '(billing\.dashboard|api)' is defined by both/.test(e.message),
     );
 
     assert.throws(
@@ -210,7 +252,14 @@ describe('bundles', () => {
     const seatsA = definePlan({ ...CLOUD, id: 'sa', features: undefined, seats: { unit: usd('10.00') } });
     const seatsB = definePlan({ ...MAILPRO, id: 'sb', features: undefined, seats: { unit: usd('5.00') } });
     assert.throws(
-      () => defineBundle({ id: 'x', items: [{ productId: 'a', plan: seatsA }, { productId: 'b', plan: seatsB }] }),
+      () =>
+        defineBundle({
+          id: 'x',
+          items: [
+            { productId: 'a', plan: seatsA },
+            { productId: 'b', plan: seatsB },
+          ],
+        }),
       (e: unknown) => e instanceof BillingError && /two seat definitions/.test(e.message),
     );
   });

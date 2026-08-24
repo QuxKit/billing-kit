@@ -1,9 +1,25 @@
-# Release — on a v* tag: build, test, and publish to npm with provenance.
+# Release — on a v* tag: build, test, and publish to npm, restricted.
 #
 # Nothing here creates the tag. Cutting a release is: bump the version in
 # package.json, update CHANGELOG.md, merge, then `git tag vX.Y.Z && git push
 # --tags`. NPM_TOKEN is a repository secret (an npm granular token with publish
-# rights on @quxkit); `id-token: write` is what lets npm attach provenance.
+# rights on @quxkit).
+#
+# GOING PUBLIC IS ONE CHANGE, NOT THREE. When @quxkit/billing-kit is ready to be
+# public, all of these move together:
+#
+#   - `--access restricted` below becomes `--access public`
+#   - `publishConfig.access` in package.json changes to match
+#   - `--provenance` comes back, along with `id-token: write` under permissions
+#   - QuxKit/billing-kit and QuxKit/quxkit-brand are made public on GitHub
+#
+# The last one is not optional for the third: npm generates provenance
+# attestations only from a public repository, so `--provenance` fails outright
+# while this repo is private. That is why it is absent rather than merely
+# unused. The repository, homepage and bugs URLs in package.json, and the brand
+# mark the README hotlinks out of quxkit-brand, are all 404 to anyone outside
+# the org until that same step — which is survivable for a restricted package
+# only its members can see, and is not survivable on a public listing page.
 name: Release
 
 on:
@@ -13,9 +29,10 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # No `id-token: write`: it exists solely to let npm attach provenance, and
+    # provenance is off while the repo is private. It returns with --provenance.
     permissions:
       contents: read
-      id-token: write
 
     services:
       postgres:
@@ -63,7 +80,10 @@ jobs:
             exit 1
           fi
 
+      # Explicit, and matching package.json's publishConfig.access rather than
+      # trusting it: the CLI flag wins over publishConfig, so the two disagreeing
+      # is how a package meant to be private reaches the public registry.
       - name: Publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+        run: npm publish --access restricted
