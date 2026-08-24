@@ -38,6 +38,13 @@ jobs:
     env:
       REQUIRE_DB: 1
       BILLING_KIT_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/billing_kit_test
+      # The CLI suite creates and drops its own databases, so it needs a URL to
+      # the maintenance database rather than the test one. Its default is
+      # `postgresql://localhost:5432/postgres` with NO password — fine against a
+      # local trust-auth server, and against this service it fails at
+      # authentication ("client password must be a string"). With REQUIRE_DB=1
+      # that is a failure rather than a skip, by design, so the URL is supplied.
+      BILLING_KIT_CLI_TEST_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
       BILLING_KIT_CLI_TEST_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
 
     steps:
