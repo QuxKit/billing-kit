@@ -4,7 +4,7 @@
 
 **QuxKit** · blue stone · usage-based billing
 
-![status](https://img.shields.io/badge/status-shipped-2ea043) ![licence](https://img.shields.io/badge/licence-Apache--2.0-4f83f6) ![npm](https://img.shields.io/badge/npm-%40quxkit%2Fbilling--kit-cb3837)
+![status](https://img.shields.io/badge/status-shipped-2ea043) ![licence](https://img.shields.io/badge/licence-BSL--1.1-8256d0) ![npm](https://img.shields.io/badge/npm-%40quxkit%2Fbilling--kit-cb3837)
 
 Usage-based billing as a library, over a provider you choose.
 
@@ -19,7 +19,7 @@ Usage-based billing as a library, over a provider you choose.
  │                                                        ▼    │
  │                        ledger — append-only, double-entry   │
  └─────────────────────────────────────────────────────────────┘
-   @quxkit/billing-kit — Apache-2.0        │            ▲
+   @quxkit/billing-kit — BSL 1.1           │            ▲
                                     settle │            │ payment
                                     period ▼            │ or refund
                                   ┌──────────────────────────┐
@@ -40,8 +40,11 @@ it is the only place Stripe and Paddle agree on what an operation means. Those
 two ship in this package; further providers are planned via
 [`@quxkit/billing-kit-adapters`](https://github.com/QuxKit/billing-kit-adapters).
 
-Apache-2.0, so that both an AGPL open core and a commercial hosted service can
-depend on it.
+Business Source License 1.1: the source is open to read, self-host, and use in
+your own product free of charge. Offering billing-kit itself as a competing
+hosted billing service, or embedding it in a competing commercial billing
+product, requires a commercial licence. Each version converts to Apache-2.0 on
+its Change Date (2030-09-11).
 
 ## The problem it solves
 
@@ -889,7 +892,14 @@ opaque tenant id, one Money type.
 
 ## Licence
 
-Apache-2.0. See `LICENSE` for the full text and `NOTICE` for attribution.
+Business Source License 1.1 (`BUSL-1.1`). Source-available: you may read, modify,
+self-host, and use billing-kit in your own product for free. Two production uses
+require a commercial licence from QuxKit.AI — offering it to third parties as a
+hosted/managed billing service, or embedding it in a product that competes with a
+paid QuxKit.AI offering. On each version's Change Date (2030-09-11) that version
+converts to the Apache License 2.0. See `LICENSE` for the full text and grant, and
+`NOTICE` for attribution. For a commercial licence, contact QuxKit.AI at
+https://quxkit.ai.
 
 `PROVENANCE.md` records that this is a fresh implementation and what it was
 informed by. Read it before importing anything into this repository.
