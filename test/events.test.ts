@@ -223,8 +223,15 @@ describe('ingest', { skip: harness === null ? SKIP_REASON : false }, () => {
   });
 
   it('routes rows to the partition for their occurred_at', async () => {
-    const event = anEvent({ occurredAt: new Date('2026-07-04T00:00:00Z') });
-    await record(db, event, NOW);
+    // Real now for BOTH the event time and the receive clock. Partitions are
+    // provisioned around the database's now() (ensure_core_partitions), and the
+    // 24h-future guard compares occurredAt to the receive clock — so a fixed
+    // date eventually rolls out of the window AND trips the guard. Real now does
+    // neither, and this is exactly the rot it replaces.
+    const at = new Date();
+    const yyyymm = `${at.getUTCFullYear()}m${String(at.getUTCMonth() + 1).padStart(2, '0')}`;
+    const event = anEvent({ occurredAt: at });
+    await record(db, event, at);
 
     const rows = await db.query<{ partition: string }>(
       `SELECT tableoid::regclass::text AS partition
@@ -236,7 +243,7 @@ describe('ingest', { skip: harness === null ? SKIP_REASON : false }, () => {
     // the schema had two conventions and billing.metering_health() measures
     // partition runway by parsing these names. One convention, and this is the
     // one that was already load-bearing.
-    assert.equal(rows[0]?.partition, 'billing.usage_events_2026m07');
+    assert.equal(rows[0]?.partition, `billing.usage_events_${yyyymm}`);
   });
 
   it('refuses an UPDATE at the database, not only in the API', async () => {

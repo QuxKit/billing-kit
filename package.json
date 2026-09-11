@@ -4,7 +4,7 @@
   "packageManager": "pnpm@11.20.0",
   "description": "Usage-based billing as a library, over a provider you choose.",
   "license": "Apache-2.0",
-  "author": "BRETT",
+  "author": "QuxKit.AI (https://quxkit.ai)",
   "type": "module",
   "sideEffects": false,
   "repository": {
