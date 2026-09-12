@@ -26,6 +26,13 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_PASSWORD: postgres
+          # Trust host auth: test/rls.test.ts creates its owner role with LOGIN
+          # and no password and connects with an empty password — its own error
+          # message says "trust auth assumed". With only POSTGRES_PASSWORD set,
+          # the image writes scram-sha-256 into pg_hba and that role can never
+          # log in, which is why every GitHub run since 2026-08-19 died in rls
+          # setup. Throwaway CI data; trust is the assumption made true.
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: billing_kit_test
         ports:
           - 5432:5432
