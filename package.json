@@ -1,6 +1,6 @@
 {
   "name": "@quxkit/billing-kit",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "packageManager": "pnpm@11.20.0",
   "description": "Usage-based billing as a library, over a provider you choose.",
   "license": "BUSL-1.1",
@@ -11,7 +11,7 @@
     "type": "git",
     "url": "git+https://github.com/QuxKit/billing-kit.git"
   },
-  "homepage": "https://github.com/QuxKit/billing-kit#readme",
+  "homepage": "https://quxkit.ai",
   "bugs": {
     "url": "https://github.com/QuxKit/billing-kit/issues"
   },
